@@ -52,33 +52,41 @@ export async function POST(req: NextRequest) {
     })),
   }
 
-  try {
-    if (format === 'docx') {
-      const buffer = await generateDocx(exportProject)
-      const filename = encodeURIComponent(`${project.name}.docx`)
-      return new NextResponse(buffer, {
-        status: 200,
-        headers: {
-          'Content-Type': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-          'Content-Disposition': `attachment; filename*=UTF-8''${filename}`,
-        },
-      })
-    } else {
-      const buffer = generatePdf(exportProject)
-      const filename = encodeURIComponent(`${project.name}.pdf`)
-      return new NextResponse(buffer, {
-        status: 200,
-        headers: {
-          'Content-Type': 'application/pdf',
-          'Content-Disposition': `attachment; filename*=UTF-8''${filename}`,
-        },
-      })
-    }
-  } catch (err) {
-    console.error('[export] error:', err)
-    return NextResponse.json(
-      { error: 'Internal Server Error', message: '내보내기에 실패했습니다. 다시 시도해 주세요.' },
-      { status: 500 }
-    )
-  }
+try {
+    if (format === 'docx') {
+      const buffer = await generateDocx(exportProject)
+      const filename = encodeURIComponent(`${project.name}.docx`)
+      
+      // Node.js Buffer를 Web 표준 Uint8Array로 변환
+      const uint8Array = new Uint8Array(buffer)
+
+      return new NextResponse(uint8Array, {
+        status: 200,
+        headers: {
+          'Content-Type': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+          'Content-Disposition': `attachment; filename*=UTF-8''${filename}`,
+        },
+      })
+    } else {
+      const buffer = generatePdf(exportProject)
+      const filename = encodeURIComponent(`${project.name}.pdf`)
+      
+      // pdf 쪽도 동일하게 변환
+      const uint8Array = new Uint8Array(buffer)
+
+      return new NextResponse(uint8Array, {
+        status: 200,
+        headers: {
+          'Content-Type': 'application/pdf',
+          'Content-Disposition': `attachment; filename*=UTF-8''${filename}`,
+        },
+      })
+    }
+  } catch (err) {
+    console.error('[export] error:', err)
+    return NextResponse.json(
+      { error: 'Internal Server Error', message: '내보내기에 실패했습니다. 다시 시도해 주세요.' },
+      { status: 500 }
+    )
+  }
 }
