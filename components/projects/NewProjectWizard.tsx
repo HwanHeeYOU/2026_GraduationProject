@@ -1,0 +1,198 @@
+'use client'
+
+import { useState } from 'react'
+import { useRouter } from 'next/navigation'
+import { ArrowRight, ArrowLeft, CheckCircle } from 'lucide-react'
+import InstitutionSelector from './InstitutionSelector'
+import ModuleSelector from './ModuleSelector'
+
+interface Institution {
+  id: string
+  name: string
+  shortName?: string | null
+}
+
+type Step = 1 | 2
+
+export default function NewProjectWizard() {
+  const router = useRouter()
+  const [step, setStep] = useState<Step>(1)
+  const [projectName, setProjectName] = useState('')
+  const [selectedInstitution, setSelectedInstitution] = useState<Institution | null>(null)
+  const [selectedModuleIds, setSelectedModuleIds] = useState<string[]>([])
+  const [submitting, setSubmitting] = useState(false)
+  const [submitError, setSubmitError] = useState<string | null>(null)
+
+  const canProceedStep1 = projectName.trim().length > 0 && selectedInstitution !== null
+
+  const handleNext = () => {
+    if (canProceedStep1) setStep(2)
+  }
+
+  const handleBack = () => {
+    setStep(1)
+    setSubmitError(null)
+  }
+
+  const handleCreate = async () => {
+    if (!selectedInstitution || selectedModuleIds.length === 0) return
+    setSubmitting(true)
+    setSubmitError(null)
+    try {
+      const res = await fetch('/api/projects', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: projectName.trim(),
+          institutionId: selectedInstitution.id,
+          selectedModuleIds,
+        }),
+      })
+      if (!res.ok) {
+        const data = await res.json()
+        throw new Error(data.message ?? '프로젝트 생성에 실패했습니다.')
+      }
+      const project = await res.json()
+      router.push(`/projects/${project.id}/workspace`)
+    } catch (e) {
+      setSubmitError(e instanceof Error ? e.message : '프로젝트 생성에 실패했습니다. 다시 시도해 주세요.')
+    } finally {
+      setSubmitting(false)
+    }
+  }
+
+  return (
+    <div className="max-w-2xl mx-auto w-full">
+      {/* 단계 표시 */}
+      <div className="flex items-center gap-3 mb-8">
+        <StepIndicator number={1} label="학교 선택" active={step === 1} done={step > 1} />
+        <div className="flex-1 h-px bg-white/10" />
+        <StepIndicator number={2} label="모듈 선택" active={step === 2} done={false} />
+      </div>
+
+      <div className="glass-card p-6 md:p-8">
+        {step === 1 && (
+          <div className="space-y-5">
+            <div>
+              <h2 className="text-lg font-semibold text-white mb-1">1단계: 학교 선택</h2>
+              <p className="text-sm text-slate-400">프로젝트명을 입력하고 소속 학교를 선택하세요.</p>
+            </div>
+
+            <div>
+              <label className="block text-sm text-slate-300 mb-1.5">프로젝트명</label>
+              <input
+                type="text"
+                value={projectName}
+                onChange={(e) => setProjectName(e.target.value)}
+                placeholder="예: 2024년 임상 연구 IRB 신청"
+                className="glass-input w-full px-4 py-3 rounded-xl text-sm text-white placeholder-slate-500 outline-none"
+              />
+            </div>
+
+            <div>
+              <label className="block text-sm text-slate-300 mb-1.5">소속 학교 / 기관</label>
+              <InstitutionSelector
+                selected={selectedInstitution}
+                onSelect={setSelectedInstitution}
+              />
+            </div>
+
+            <div className="flex justify-end pt-2">
+              <button
+                onClick={handleNext}
+                disabled={!canProceedStep1}
+                className="cta-primary flex items-center gap-2 px-5 py-2.5 rounded-xl text-sm text-white font-medium disabled:opacity-40 disabled:cursor-not-allowed"
+              >
+                다음
+                <ArrowRight size={16} />
+              </button>
+            </div>
+          </div>
+        )}
+
+        {step === 2 && selectedInstitution && (
+          <div className="space-y-5">
+            <div>
+              <h2 className="text-lg font-semibold text-white mb-1">2단계: 모듈 선택</h2>
+              <p className="text-sm text-slate-400">
+                <span className="text-blue-400 font-medium">{selectedInstitution.name}</span>의 IRB 항목을 선택하세요.
+                필수 항목은 기본 선택되어 있습니다.
+              </p>
+            </div>
+
+            <ModuleSelector
+              institutionId={selectedInstitution.id}
+              selectedIds={selectedModuleIds}
+              onChange={setSelectedModuleIds}
+            />
+
+            {submitError && (
+              <p className="text-sm text-red-400 bg-red-500/10 border border-red-500/30 rounded-lg px-3 py-2">
+                {submitError}
+              </p>
+            )}
+
+            <div className="flex items-center justify-between pt-2">
+              <button
+                onClick={handleBack}
+                className="glass-button flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm text-slate-300"
+              >
+                <ArrowLeft size={16} />
+                이전
+              </button>
+              <button
+                onClick={handleCreate}
+                disabled={submitting || selectedModuleIds.length === 0}
+                className="cta-primary flex items-center gap-2 px-5 py-2.5 rounded-xl text-sm text-white font-medium disabled:opacity-40 disabled:cursor-not-allowed"
+              >
+                {submitting ? (
+                  <>생성 중...</>
+                ) : (
+                  <>
+                    <CheckCircle size={16} />
+                    프로젝트 생성
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
+function StepIndicator({
+  number,
+  label,
+  active,
+  done,
+}: {
+  number: number
+  label: string
+  active: boolean
+  done: boolean
+}) {
+  return (
+    <div className="flex items-center gap-2">
+      <div
+        className={`w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold border transition-colors ${
+          done
+            ? 'bg-blue-500 border-blue-500 text-white'
+            : active
+            ? 'border-blue-400 text-blue-400 bg-blue-500/10'
+            : 'border-white/20 text-slate-500'
+        }`}
+      >
+        {done ? <CheckCircle size={14} /> : number}
+      </div>
+      <span
+        className={`text-sm font-medium ${
+          active ? 'text-white' : done ? 'text-blue-400' : 'text-slate-500'
+        }`}
+      >
+        {label}
+      </span>
+    </div>
+  )
+}

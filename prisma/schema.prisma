@@ -1,0 +1,81 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id        String   @id @default(cuid())
+  email     String   @unique
+  password  String
+  name      String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  projects  Project[]
+}
+
+model Institution {
+  id        String              @id @default(cuid())
+  name      String              @unique
+  shortName String?
+  modules   InstitutionModule[]
+  projects  Project[]
+}
+
+model IRBModule {
+  id                 String              @id @default(cuid())
+  name               String
+  description        String
+  category           String
+  isRequired         Boolean             @default(false)
+  order              Int
+  hasFormula         Boolean             @default(false)
+  promptHint         String?
+  institutionModules InstitutionModule[]
+  projectModules     ProjectModule[]
+}
+
+model InstitutionModule {
+  id            String      @id @default(cuid())
+  institution   Institution @relation(fields: [institutionId], references: [id])
+  institutionId String
+  module        IRBModule   @relation(fields: [moduleId], references: [id])
+  moduleId      String
+  priority      Int
+  isRequired    Boolean     @default(false)
+
+  @@unique([institutionId, moduleId])
+}
+
+model Project {
+  id            String          @id @default(cuid())
+  name          String
+  user          User            @relation(fields: [userId], references: [id])
+  userId        String
+  institution   Institution     @relation(fields: [institutionId], references: [id])
+  institutionId String
+  status        String          @default("DRAFT")
+  createdAt     DateTime        @default(now())
+  updatedAt     DateTime        @updatedAt
+  modules       ProjectModule[]
+}
+
+model ProjectModule {
+  id        String    @id @default(cuid())
+  project   Project   @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  projectId String
+  module    IRBModule @relation(fields: [moduleId], references: [id])
+  moduleId  String
+  content   String    @default("")
+  order     Int
+  updatedAt DateTime  @updatedAt
+
+  @@unique([projectId, moduleId])
+}
+
