@@ -12,13 +12,19 @@ export default async function DashboardPage() {
     redirect('/auth/login')
   }
 
-  const projects = await prisma.project.findMany({
+  const rawProjects = await prisma.project.findMany({
     where: { userId: session.user.id },
     include: {
       institution: { select: { id: true, name: true, shortName: true } },
     },
     orderBy: { updatedAt: 'desc' },
   })
+
+  const projects = rawProjects.map((p) => ({
+    ...p,
+    status: p.status as 'DRAFT' | 'IN_PROGRESS' | 'COMPLETED',
+    updatedAt: p.updatedAt.toISOString(),
+  }))
 
   return (
     <DashboardLayout userName={session.user.name ?? session.user.email}>
