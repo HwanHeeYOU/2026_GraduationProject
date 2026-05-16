@@ -1,16 +1,24 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { useRouter } from 'next/navigation'
 import { ArrowRight, ArrowLeft, CheckCircle } from 'lucide-react'
 import InstitutionSelector from './InstitutionSelector'
 import ModuleSelector from './ModuleSelector'
+import IRBFileUploader from './IRBFileUploader'
+import type { ModuleRecommendation } from '@/lib/irb/types'
 
 interface Institution {
   id: string
   name: string
   shortName?: string | null
 }
+
+type AnalysisState =
+  | { status: 'idle' }
+  | { status: 'analyzing' }
+  | { status: 'done'; recommendations: ModuleRecommendation[] }
+  | { status: 'error'; message: string }
 
 type Step = 1 | 2
 
@@ -23,7 +31,79 @@ export default function NewProjectWizard() {
   const [submitting, setSubmitting] = useState(false)
   const [submitError, setSubmitError] = useState<string | null>(null)
 
-  const canProceedStep1 = projectName.trim().length > 0 && selectedInstitution !== null
+  const [uploadedFile, setUploadedFile] = useState<File | null>(null)
+  const [analysisState, setAnalysisState] = useState<AnalysisState>({ status: 'idle' })
+  const abortRef = useRef<AbortController | null>(null)
+
+  const canProceedStep1 =
+    projectName.trim().length > 0 &&
+    selectedInstitution !== null &&
+    analysisState.status !== 'analyzing'
+
+  const recommendations =
+    analysisState.status === 'done' ? analysisState.recommendations : undefined
+
+  // Auto-trigger analysis whenever file + institution are both set
+  useEffect(() => {
+    if (!uploadedFile || !selectedInstitution) return
+
+    // Cancel any in-flight request
+    abortRef.current?.abort()
+    const controller = new AbortController()
+    abortRef.current = controller
+
+    const run = async () => {
+      setAnalysisState({ status: 'analyzing' })
+
+      const formData = new FormData()
+      formData.append('file', uploadedFile)
+      formData.append('institutionId', selectedInstitution.id)
+
+      try {
+        const res = await fetch('/api/ai/analyze-irb-file', {
+          method: 'POST',
+          body: formData,
+          signal: controller.signal,
+        })
+
+        if (!res.ok) {
+          const data = await res.json().catch(() => ({}))
+          setAnalysisState({
+            status: 'error',
+            message: (data as { message?: string }).message ?? '파일 분석에 실패했습니다.',
+          })
+          return
+        }
+
+        const data: { recommendations: ModuleRecommendation[] } = await res.json()
+
+        // Pre-select AI-required modules
+        const aiRequiredIds = data.recommendations
+          .filter((r) => r.status === 'required')
+          .map((r) => r.moduleId)
+        setSelectedModuleIds((prev) => Array.from(new Set([...prev, ...aiRequiredIds])))
+
+        setAnalysisState({ status: 'done', recommendations: data.recommendations })
+      } catch (err) {
+        if (err instanceof Error && err.name === 'AbortError') return
+        setAnalysisState({ status: 'error', message: '파일 분석에 실패했습니다.' })
+      }
+    }
+
+    run()
+
+    return () => {
+      controller.abort()
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [uploadedFile, selectedInstitution?.id])
+
+  // Reset analysis when file is removed
+  const handleFileChange = (file: File | null) => {
+    abortRef.current?.abort()
+    setUploadedFile(file)
+    if (!file) setAnalysisState({ status: 'idle' })
+  }
 
   const handleNext = () => {
     if (canProceedStep1) setStep(2)
@@ -50,10 +130,10 @@ export default function NewProjectWizard() {
       })
       if (!res.ok) {
         const data = await res.json()
-        throw new Error(data.message ?? '프로젝트 생성에 실패했습니다.')
+        throw new Error((data as { message?: string }).message ?? '프로젝트 생성에 실패했습니다.')
       }
       const project = await res.json()
-      router.push(`/projects/${project.id}/workspace`)
+      router.push(`/projects/${(project as { id: string }).id}/workspace`)
     } catch (e) {
       setSubmitError(e instanceof Error ? e.message : '프로젝트 생성에 실패했습니다. 다시 시도해 주세요.')
     } finally {
@@ -97,13 +177,20 @@ export default function NewProjectWizard() {
               />
             </div>
 
+            <IRBFileUploader
+              file={uploadedFile}
+              analysisStatus={analysisState.status}
+              analysisError={analysisState.status === 'error' ? analysisState.message : undefined}
+              onFileChange={handleFileChange}
+            />
+
             <div className="flex justify-end pt-2">
               <button
                 onClick={handleNext}
                 disabled={!canProceedStep1}
                 className="cta-primary flex items-center gap-2 px-5 py-2.5 rounded-xl text-sm text-white font-medium disabled:opacity-40 disabled:cursor-not-allowed"
               >
-                다음
+                {analysisState.status === 'analyzing' ? '분석 중...' : '다음'}
                 <ArrowRight size={16} />
               </button>
             </div>
@@ -124,6 +211,7 @@ export default function NewProjectWizard() {
               institutionId={selectedInstitution.id}
               selectedIds={selectedModuleIds}
               onChange={setSelectedModuleIds}
+              recommendations={recommendations}
             />
 
             {submitError && (

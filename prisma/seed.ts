@@ -1,9 +1,23 @@
 import { PrismaClient } from '@prisma/client'
+import bcrypt from 'bcryptjs'
 
 const prisma = new PrismaClient()
 
 async function main() {
   console.log('🌱 Seeding database...')
+
+  // 로컬 개발용 계정
+  const hashedPassword = await bcrypt.hash('password123', 10)
+  await prisma.user.upsert({
+    where: { email: 'dev@test.com' },
+    update: {},
+    create: {
+      email: 'dev@test.com',
+      password: hashedPassword,
+      name: '개발용 연구자',
+    },
+  })
+  console.log('✅ Created dev user (dev@test.com / password123)')
 
   // IRB 모듈 10개 생성
   const irbModules = await Promise.all([
