@@ -3,7 +3,6 @@
 import { useState, Suspense, useEffect } from 'react'
 import { X } from 'lucide-react'
 import { signIn } from 'next-auth/react'
-import { useRouter } from 'next/navigation'
 
 type Mode = 'login' | 'register'
 
@@ -13,7 +12,6 @@ interface AuthModalProps {
 }
 
 function LoginForm({ onClose, onSwitchToRegister }: { onClose: () => void; onSwitchToRegister: () => void }) {
-  const router = useRouter()
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [error, setError] = useState('')
@@ -30,8 +28,7 @@ function LoginForm({ onClose, onSwitchToRegister }: { onClose: () => void; onSwi
       return
     }
     onClose()
-    router.push('/dashboard')
-    router.refresh()
+    window.location.href = '/dashboard'
   }
 
   return (
@@ -81,7 +78,6 @@ function LoginForm({ onClose, onSwitchToRegister }: { onClose: () => void; onSwi
 }
 
 function RegisterForm({ onClose, onSwitchToLogin }: { onClose: () => void; onSwitchToLogin: () => void }) {
-  const router = useRouter()
   const [name, setName] = useState('')
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
@@ -106,8 +102,7 @@ function RegisterForm({ onClose, onSwitchToLogin }: { onClose: () => void; onSwi
       }
       await signIn('credentials', { email, password, redirect: false })
       onClose()
-      router.push('/dashboard')
-      router.refresh()
+      window.location.href = '/dashboard'
     } catch {
       setError('서버 오류가 발생했습니다.')
       setLoading(false)
