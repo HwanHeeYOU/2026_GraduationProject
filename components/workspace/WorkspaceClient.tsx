@@ -24,7 +24,7 @@ export default function WorkspaceClient({
   return (
     <DashboardLayout userName={userName}>
       <NetworkSyncProvider>
-        <div className="night-campus-bg min-h-full py-6 px-4">
+        <div className="py-2">
           {/* 상단 헤더 */}
           <div className="flex items-start justify-between gap-4 mb-6">
             <div>
