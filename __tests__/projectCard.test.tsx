@@ -23,23 +23,23 @@ const mockProject = {
 
 describe('ProjectCard', () => {
   it('프로젝트명을 표시한다', () => {
-    render(<ProjectCard project={mockProject} onDelete={vi.fn()} />)
+    render(<ProjectCard project={mockProject} onDelete={vi.fn()} onRename={vi.fn()} />)
     expect(screen.getByText('암 연구 IRB 신청')).toBeInTheDocument()
   })
 
   it('학교명(shortName)을 표시한다', () => {
-    render(<ProjectCard project={mockProject} onDelete={vi.fn()} />)
+    render(<ProjectCard project={mockProject} onDelete={vi.fn()} onRename={vi.fn()} />)
     expect(screen.getByText('서울대')).toBeInTheDocument()
   })
 
   it('상태 배지를 표시한다', () => {
-    render(<ProjectCard project={mockProject} onDelete={vi.fn()} />)
+    render(<ProjectCard project={mockProject} onDelete={vi.fn()} onRename={vi.fn()} />)
     expect(screen.getByText('진행 중')).toBeInTheDocument()
   })
 
   it('DRAFT 상태 배지를 표시한다', () => {
     const draftProject = { ...mockProject, status: 'DRAFT' as const }
-    render(<ProjectCard project={draftProject} onDelete={vi.fn()} />)
+    render(<ProjectCard project={draftProject} onDelete={vi.fn()} onRename={vi.fn()} />)
     expect(screen.getByText('초안')).toBeInTheDocument()
   })
 })

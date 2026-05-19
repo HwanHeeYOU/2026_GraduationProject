@@ -34,6 +34,17 @@ export default function DashboardClient({ initialProjects }: DashboardClientProp
     }
   }
 
+  const handleRename = async (id: string, newName: string) => {
+    const res = await fetch(`/api/projects/${id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: newName }),
+    })
+    if (res.ok) {
+      setProjects((prev) => prev.map((p) => (p.id === id ? { ...p, name: newName } : p)))
+    }
+  }
+
   return (
     <div>
       {/* 헤더 영역 */}
@@ -71,6 +82,7 @@ export default function DashboardClient({ initialProjects }: DashboardClientProp
               key={project.id}
               project={project}
               onDelete={handleDelete}
+              onRename={handleRename}
             />
           ))}
         </div>
