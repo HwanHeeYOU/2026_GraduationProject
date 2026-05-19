@@ -1,7 +1,7 @@
 'use client'
 
-import { useState, useEffect, useRef } from 'react'
-import { Search, ChevronDown, AlertCircle } from 'lucide-react'
+import { useState, useEffect, useRef, useCallback } from 'react'
+import { Search, X, AlertCircle, CheckCircle2 } from 'lucide-react'
 
 interface Institution {
   id: string
@@ -20,7 +20,10 @@ export default function InstitutionSelector({ onSelect, selected }: InstitutionS
   const [open, setOpen] = useState(false)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const [activeIndex, setActiveIndex] = useState(0)
   const containerRef = useRef<HTMLDivElement>(null)
+  const inputRef = useRef<HTMLInputElement>(null)
+  const listRef = useRef<HTMLUListElement>(null)
 
   useEffect(() => {
     const fetchInstitutions = async () => {
@@ -51,16 +54,71 @@ export default function InstitutionSelector({ onSelect, selected }: InstitutionS
     return () => document.removeEventListener('mousedown', handleClickOutside)
   }, [])
 
-  const filtered = institutions.filter(
-    (inst) =>
-      inst.name.toLowerCase().includes(query.toLowerCase()) ||
-      (inst.shortName ?? '').toLowerCase().includes(query.toLowerCase())
+  const filtered = query.trim()
+    ? institutions.filter(
+        (inst) =>
+          inst.name.toLowerCase().includes(query.toLowerCase()) ||
+          (inst.shortName ?? '').toLowerCase().includes(query.toLowerCase())
+      )
+    : []
+
+  // 활성 항목이 범위를 벗어나지 않도록 보정
+  const clampedIndex = Math.min(activeIndex, Math.max(filtered.length - 1, 0))
+
+  const handleSelect = useCallback(
+    (inst: Institution) => {
+      onSelect(inst)
+      setQuery('')
+      setOpen(false)
+      inputRef.current?.blur()
+    },
+    [onSelect]
   )
 
-  const handleSelect = (inst: Institution) => {
-    onSelect(inst)
+  const handleClear = () => {
     setQuery('')
     setOpen(false)
+    onSelect(null as unknown as Institution) // 선택 해제
+    inputRef.current?.focus()
+  }
+
+  const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const val = e.target.value
+    setQuery(val)
+    setActiveIndex(0)
+    setOpen(val.trim().length > 0)
+  }
+
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (!open || filtered.length === 0) return
+
+    switch (e.key) {
+      case 'ArrowDown':
+        e.preventDefault()
+        setActiveIndex((i) => Math.min(i + 1, filtered.length - 1))
+        scrollActiveIntoView(Math.min(clampedIndex + 1, filtered.length - 1))
+        break
+      case 'ArrowUp':
+        e.preventDefault()
+        setActiveIndex((i) => Math.max(i - 1, 0))
+        scrollActiveIntoView(Math.max(clampedIndex - 1, 0))
+        break
+      case 'Tab':
+      case 'Enter':
+        e.preventDefault()
+        if (filtered[clampedIndex]) handleSelect(filtered[clampedIndex])
+        break
+      case 'Escape':
+        setOpen(false)
+        break
+    }
+  }
+
+  const scrollActiveIntoView = (index: number) => {
+    const list = listRef.current
+    if (!list) return
+    const item = list.children[index] as HTMLElement | undefined
+    item?.scrollIntoView({ block: 'nearest' })
   }
 
   if (error) {
@@ -80,59 +138,120 @@ export default function InstitutionSelector({ onSelect, selected }: InstitutionS
 
   return (
     <div ref={containerRef} className="relative">
-      {/* 선택 버튼 */}
-      <button
-        type="button"
-        onClick={() => setOpen((v) => !v)}
-        className="glass-input w-full flex items-center justify-between px-4 py-3 rounded-xl text-sm text-left"
-        disabled={loading}
-      >
-        <span className={selected ? 'text-white' : 'text-slate-400'}>
-          {loading ? '학교 목록 불러오는 중...' : selected ? selected.name : '학교를 선택하세요'}
-        </span>
-        <ChevronDown
-          size={16}
-          className={`text-slate-400 transition-transform ${open ? 'rotate-180' : ''}`}
-        />
-      </button>
-
-      {/* 드롭다운 */}
-      {open && (
-        <div className="absolute z-50 mt-2 w-full glass-card rounded-xl overflow-hidden shadow-xl">
-          {/* 검색 입력 */}
-          <div className="flex items-center gap-2 px-3 py-2 border-b border-white/10">
-            <Search size={14} className="text-slate-400 shrink-0" />
-            <input
-              autoFocus
-              type="text"
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-              placeholder="학교 검색..."
-              className="flex-1 bg-transparent text-sm text-white placeholder-slate-500 outline-none"
-            />
+      {/* 선택된 학교 표시 */}
+      {selected && !open ? (
+        <div className="glass-input w-full flex items-center justify-between px-4 py-3 rounded-xl text-sm">
+          <div className="flex items-center gap-2">
+            <CheckCircle2 size={15} className="text-blue-400 shrink-0" />
+            <span className="text-white font-medium">{selected.name}</span>
+            {selected.shortName && (
+              <span className="text-slate-500 text-xs">{selected.shortName}</span>
+            )}
           </div>
+          <button
+            type="button"
+            onClick={handleClear}
+            className="text-slate-500 hover:text-slate-300 transition-colors ml-2"
+            aria-label="선택 취소"
+          >
+            <X size={14} />
+          </button>
+        </div>
+      ) : (
+        /* 검색 입력창 */
+        <div className="relative">
+          <Search
+            size={15}
+            className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none"
+          />
+          <input
+            ref={inputRef}
+            type="text"
+            value={query}
+            onChange={handleInputChange}
+            onKeyDown={handleKeyDown}
+            onFocus={() => query.trim() && setOpen(true)}
+            placeholder={loading ? '학교 목록 불러오는 중...' : '학교명을 입력하세요 (예: 연세, 가톨릭)'}
+            disabled={loading}
+            autoComplete="off"
+            className="glass-input w-full pl-9 pr-4 py-3 rounded-xl text-sm text-white placeholder-slate-500 outline-none disabled:opacity-50"
+          />
+          {query && (
+            <button
+              type="button"
+              onClick={() => { setQuery(''); setOpen(false) }}
+              className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-500 hover:text-slate-300 transition-colors"
+              aria-label="지우기"
+            >
+              <X size={14} />
+            </button>
+          )}
+        </div>
+      )}
 
-          {/* 목록 */}
-          <ul className="max-h-56 overflow-y-auto">
+      {/* 자동완성 드롭다운 */}
+      {open && (
+        <div className="absolute z-50 mt-1.5 w-full glass-card rounded-xl overflow-hidden shadow-xl border border-white/10">
+          <ul ref={listRef} className="max-h-56 overflow-y-auto py-1" role="listbox">
             {filtered.length === 0 ? (
-              <li className="px-4 py-3 text-sm text-slate-400 text-center">검색 결과가 없습니다.</li>
+              <li className="px-4 py-3 text-sm text-slate-400 text-center">
+                검색 결과가 없습니다.
+              </li>
             ) : (
-              filtered.map((inst) => (
-                <li key={inst.id}>
-                  <button
-                    type="button"
-                    onClick={() => handleSelect(inst)}
-                    className="w-full text-left px-4 py-2.5 text-sm text-slate-200 hover:bg-white/10 transition-colors flex items-center justify-between"
-                  >
-                    <span>{inst.name}</span>
-                    {inst.shortName && (
-                      <span className="text-xs text-slate-500">{inst.shortName}</span>
-                    )}
-                  </button>
-                </li>
-              ))
+              filtered.map((inst, i) => {
+                const isActive = i === clampedIndex
+                // 매칭 부분 하이라이트
+                const highlight = (text: string) => {
+                  const idx = text.toLowerCase().indexOf(query.toLowerCase())
+                  if (idx === -1) return <span>{text}</span>
+                  return (
+                    <>
+                      {text.slice(0, idx)}
+                      <mark className="bg-blue-500/30 text-blue-200 rounded-sm not-italic">
+                        {text.slice(idx, idx + query.length)}
+                      </mark>
+                      {text.slice(idx + query.length)}
+                    </>
+                  )
+                }
+
+                return (
+                  <li key={inst.id} role="option" aria-selected={isActive}>
+                    <button
+                      type="button"
+                      onMouseDown={(e) => e.preventDefault()} // blur 방지
+                      onClick={() => handleSelect(inst)}
+                      onMouseEnter={() => setActiveIndex(i)}
+                      className={`w-full text-left px-4 py-2.5 text-sm transition-colors flex items-center justify-between gap-3 ${
+                        isActive
+                          ? 'bg-blue-500/20 text-white'
+                          : 'text-slate-200 hover:bg-white/8'
+                      }`}
+                    >
+                      <span>{highlight(inst.name)}</span>
+                      <div className="flex items-center gap-2 shrink-0">
+                        {inst.shortName && (
+                          <span className="text-xs text-slate-500">{inst.shortName}</span>
+                        )}
+                        {isActive && (
+                          <span className="text-[10px] text-slate-500 border border-white/15 rounded px-1 py-0.5 leading-none">
+                            Tab
+                          </span>
+                        )}
+                      </div>
+                    </button>
+                  </li>
+                )
+              })
             )}
           </ul>
+          {filtered.length > 0 && (
+            <div className="px-4 py-2 border-t border-white/8 flex items-center gap-3 text-[11px] text-slate-600">
+              <span>↑↓ 이동</span>
+              <span>Tab / Enter 선택</span>
+              <span>Esc 닫기</span>
+            </div>
+          )}
         </div>
       )}
     </div>

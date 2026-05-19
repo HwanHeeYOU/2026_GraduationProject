@@ -165,36 +165,59 @@ async function main() {
 
   console.log(`✅ Created ${irbModules.length} IRB modules`)
 
-  // 학교 3개 생성
-  const institutions = await Promise.all([
-    prisma.institution.upsert({
-      where: { name: '서울대학교' },
-      update: {},
-      create: {
-        id: 'inst-snu',
-        name: '서울대학교',
-        shortName: 'SNU',
-      },
-    }),
-    prisma.institution.upsert({
-      where: { name: '연세대학교' },
-      update: {},
-      create: {
-        id: 'inst-yonsei',
-        name: '연세대학교',
-        shortName: 'Yonsei',
-      },
-    }),
-    prisma.institution.upsert({
-      where: { name: '고려대학교' },
-      update: {},
-      create: {
-        id: 'inst-korea',
-        name: '고려대학교',
-        shortName: 'Korea',
-      },
-    }),
-  ])
+  // 학교 목록
+  const institutionData = [
+    { id: 'inst-snu',       name: '서울대학교',           shortName: 'Seoul National' },
+    { id: 'inst-yonsei',    name: '연세대학교',           shortName: 'Yonsei' },
+    { id: 'inst-korea',     name: '고려대학교',           shortName: 'Korea' },
+    { id: 'inst-sogang',    name: '서강대학교',           shortName: 'Sogang' },
+    { id: 'inst-skku',      name: '성균관대학교',         shortName: 'Sungkyunkwan' },
+    { id: 'inst-hanyang',   name: '한양대학교',           shortName: 'Hanyang' },
+    { id: 'inst-cau',       name: '중앙대학교',           shortName: 'Chung-Ang' },
+    { id: 'inst-khu',       name: '경희대학교',           shortName: 'Kyung Hee' },
+    { id: 'inst-hufs',      name: '한국외국어대학교',     shortName: 'HUFS' },
+    { id: 'inst-uos',       name: '서울시립대학교',       shortName: 'UOS' },
+    { id: 'inst-konkuk',    name: '건국대학교',           shortName: 'Konkuk' },
+    { id: 'inst-dongguk',   name: '동국대학교',           shortName: 'Dongguk' },
+    { id: 'inst-hongik',    name: '홍익대학교',           shortName: 'Hongik' },
+    { id: 'inst-ajou',      name: '아주대학교',           shortName: 'Ajou' },
+    { id: 'inst-inha',      name: '인하대학교',           shortName: 'Inha' },
+    { id: 'inst-seoultech', name: '서울과학기술대학교',   shortName: 'Seoul TECH' },
+    { id: 'inst-kookmin',   name: '국민대학교',           shortName: 'Kookmin' },
+    { id: 'inst-soongsil',  name: '숭실대학교',           shortName: 'Soongsil' },
+    { id: 'inst-sejong',    name: '세종대학교',           shortName: 'Sejong' },
+    { id: 'inst-dankook',   name: '단국대학교',           shortName: 'Dankook' },
+    { id: 'inst-kwangwoon', name: '광운대학교',           shortName: 'Kwangwoon' },
+    { id: 'inst-myongji',   name: '명지대학교',           shortName: 'Myongji' },
+    { id: 'inst-sangmyung', name: '상명대학교',           shortName: 'Sangmyung' },
+    { id: 'inst-gachon',    name: '가천대학교',           shortName: 'Gachon' },
+    { id: 'inst-kyonggi',   name: '경기대학교',           shortName: 'Kyonggi' },
+    { id: 'inst-inu',       name: '인천대학교',           shortName: 'Incheon National' },
+    { id: 'inst-pnu',       name: '부산대학교',           shortName: 'Pusan National' },
+    { id: 'inst-knu',       name: '경북대학교',           shortName: 'Kyungpook National' },
+    { id: 'inst-chonnam',   name: '전남대학교',           shortName: 'Chonnam National' },
+    { id: 'inst-cnu',       name: '충남대학교',           shortName: 'Chungnam National' },
+    { id: 'inst-cbnu',      name: '충북대학교',           shortName: 'Chungbuk National' },
+    { id: 'inst-jbnu',      name: '전북대학교',           shortName: 'Jeonbuk National' },
+    { id: 'inst-gnu',       name: '경상국립대학교',       shortName: 'Gyeongsang National' },
+    { id: 'inst-kangwon',   name: '강원대학교',           shortName: 'Kangwon National' },
+    { id: 'inst-jejunu',    name: '제주대학교',           shortName: 'Jeju National' },
+    { id: 'inst-yeungnam',  name: '영남대학교',           shortName: 'Yeungnam' },
+    { id: 'inst-donga',     name: '동아대학교',           shortName: 'Dong-A' },
+    { id: 'inst-keimyung',  name: '계명대학교',           shortName: 'Keimyung' },
+    { id: 'inst-ulsan',     name: '울산대학교',           shortName: 'Ulsan' },
+    { id: 'inst-chosun',    name: '조선대학교',           shortName: 'Chosun' },
+  ]
+
+  const institutions = await Promise.all(
+    institutionData.map((inst) =>
+      prisma.institution.upsert({
+        where: { name: inst.name },
+        update: { shortName: inst.shortName },
+        create: inst,
+      })
+    )
+  )
 
   console.log(`✅ Created ${institutions.length} institutions`)
 
