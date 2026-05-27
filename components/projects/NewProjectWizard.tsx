@@ -31,7 +31,7 @@ export default function NewProjectWizard() {
   const [submitting, setSubmitting] = useState(false)
   const [submitError, setSubmitError] = useState<string | null>(null)
 
-  const [uploadedFile, setUploadedFile] = useState<File | null>(null)
+  const [uploadedFiles, setUploadedFiles] = useState<File[]>([])
   const [analysisState, setAnalysisState] = useState<AnalysisState>({ status: 'idle' })
   const abortRef = useRef<AbortController | null>(null)
 
@@ -43,11 +43,10 @@ export default function NewProjectWizard() {
   const recommendations =
     analysisState.status === 'done' ? analysisState.recommendations : undefined
 
-  // Auto-trigger analysis whenever file + institution are both set
+  // Auto-trigger analysis whenever files + institution are both set
   useEffect(() => {
-    if (!uploadedFile || !selectedInstitution) return
+    if (uploadedFiles.length === 0 || !selectedInstitution) return
 
-    // Cancel any in-flight request
     abortRef.current?.abort()
     const controller = new AbortController()
     abortRef.current = controller
@@ -56,7 +55,7 @@ export default function NewProjectWizard() {
       setAnalysisState({ status: 'analyzing' })
 
       const formData = new FormData()
-      formData.append('file', uploadedFile)
+      uploadedFiles.forEach((f) => formData.append('file', f))
       formData.append('institutionId', selectedInstitution.id)
 
       try {
@@ -77,7 +76,6 @@ export default function NewProjectWizard() {
 
         const data: { recommendations: ModuleRecommendation[] } = await res.json()
 
-        // Pre-select AI-required modules
         const aiRequiredIds = data.recommendations
           .filter((r) => r.status === 'required')
           .map((r) => r.moduleId)
@@ -92,17 +90,15 @@ export default function NewProjectWizard() {
 
     run()
 
-    return () => {
-      controller.abort()
-    }
+    return () => { controller.abort() }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [uploadedFile, selectedInstitution?.id])
+  }, [uploadedFiles, selectedInstitution?.id])
 
-  // Reset analysis when file is removed
-  const handleFileChange = (file: File | null) => {
+  // 파일 목록 변경 핸들러
+  const handleFilesChange = (files: File[]) => {
     abortRef.current?.abort()
-    setUploadedFile(file)
-    if (!file) setAnalysisState({ status: 'idle' })
+    setUploadedFiles(files)
+    if (files.length === 0) setAnalysisState({ status: 'idle' })
   }
 
   const handleNext = () => {
@@ -155,11 +151,11 @@ export default function NewProjectWizard() {
           <div className="space-y-5">
             <div>
               <h2 className="text-lg font-semibold text-white mb-1">1단계: 학교 선택</h2>
-              <p className="text-sm text-slate-400">프로젝트명을 입력하고 소속 학교를 선택하세요.</p>
+              <p className="text-sm text-slate-300">프로젝트명을 입력하고 소속 학교를 선택하세요.</p>
             </div>
 
             <div>
-              <label className="block text-sm text-slate-300 mb-1.5">프로젝트명</label>
+              <label className="block text-sm text-slate-200 font-medium mb-1.5">프로젝트명</label>
               <input
                 type="text"
                 value={projectName}
@@ -170,7 +166,7 @@ export default function NewProjectWizard() {
             </div>
 
             <div>
-              <label className="block text-sm text-slate-300 mb-1.5">소속 학교 / 기관</label>
+              <label className="block text-sm text-slate-200 font-medium mb-1.5">소속 학교 / 기관</label>
               <InstitutionSelector
                 selected={selectedInstitution}
                 onSelect={setSelectedInstitution}
@@ -178,10 +174,10 @@ export default function NewProjectWizard() {
             </div>
 
             <IRBFileUploader
-              file={uploadedFile}
+              files={uploadedFiles}
               analysisStatus={analysisState.status}
               analysisError={analysisState.status === 'error' ? analysisState.message : undefined}
-              onFileChange={handleFileChange}
+              onFilesChange={handleFilesChange}
             />
 
             <div className="flex justify-end pt-2">
@@ -201,8 +197,8 @@ export default function NewProjectWizard() {
           <div className="space-y-5">
             <div>
               <h2 className="text-lg font-semibold text-white mb-1">2단계: 모듈 선택</h2>
-              <p className="text-sm text-slate-400">
-                <span className="text-blue-400 font-medium">{selectedInstitution.name}</span>의 IRB 항목을 선택하세요.
+              <p className="text-sm text-slate-300">
+                <span className="text-blue-300 font-medium">{selectedInstitution.name}</span>의 IRB 항목을 선택하세요.
                 필수 항목은 기본 선택되어 있습니다.
               </p>
             </div>

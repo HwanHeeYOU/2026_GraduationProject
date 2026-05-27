@@ -191,7 +191,15 @@ export default function InstitutionSelector({ onSelect, selected }: InstitutionS
 
       {/* 자동완성 드롭다운 */}
       {open && (
-        <div className="absolute z-50 mt-1.5 w-full glass-card rounded-xl overflow-hidden shadow-xl border border-white/10">
+        <div
+          className="absolute z-50 mt-1.5 w-full rounded-xl overflow-hidden shadow-2xl"
+          style={{
+            background: 'rgba(10, 15, 35, 0.97)',
+            border: '1px solid rgba(255,255,255,0.15)',
+            backdropFilter: 'blur(20px)',
+            WebkitBackdropFilter: 'blur(20px)',
+          }}
+        >
           <ul ref={listRef} className="max-h-56 overflow-y-auto py-1" role="listbox">
             {filtered.length === 0 ? (
               <li className="px-4 py-3 text-sm text-slate-400 text-center">
@@ -207,7 +215,7 @@ export default function InstitutionSelector({ onSelect, selected }: InstitutionS
                   return (
                     <>
                       {text.slice(0, idx)}
-                      <mark className="bg-blue-500/30 text-blue-200 rounded-sm not-italic">
+                      <mark className="bg-blue-500/40 text-blue-200 rounded-sm not-italic">
                         {text.slice(idx, idx + query.length)}
                       </mark>
                       {text.slice(idx + query.length)}
@@ -219,22 +227,22 @@ export default function InstitutionSelector({ onSelect, selected }: InstitutionS
                   <li key={inst.id} role="option" aria-selected={isActive}>
                     <button
                       type="button"
-                      onMouseDown={(e) => e.preventDefault()} // blur 방지
+                      onMouseDown={(e) => e.preventDefault()}
                       onClick={() => handleSelect(inst)}
                       onMouseEnter={() => setActiveIndex(i)}
                       className={`w-full text-left px-4 py-2.5 text-sm transition-colors flex items-center justify-between gap-3 ${
                         isActive
-                          ? 'bg-blue-500/20 text-white'
-                          : 'text-slate-200 hover:bg-white/8'
+                          ? 'bg-blue-600/30 text-white'
+                          : 'text-slate-100 hover:bg-white/10'
                       }`}
                     >
                       <span>{highlight(inst.name)}</span>
                       <div className="flex items-center gap-2 shrink-0">
                         {inst.shortName && (
-                          <span className="text-xs text-slate-500">{inst.shortName}</span>
+                          <span className="text-xs text-slate-400">{inst.shortName}</span>
                         )}
                         {isActive && (
-                          <span className="text-[10px] text-slate-500 border border-white/15 rounded px-1 py-0.5 leading-none">
+                          <span className="text-[10px] text-slate-400 border border-white/20 rounded px-1 py-0.5 leading-none">
                             Tab
                           </span>
                         )}
@@ -246,7 +254,10 @@ export default function InstitutionSelector({ onSelect, selected }: InstitutionS
             )}
           </ul>
           {filtered.length > 0 && (
-            <div className="px-4 py-2 border-t border-white/8 flex items-center gap-3 text-[11px] text-slate-600">
+            <div
+              className="px-4 py-2 flex items-center gap-3 text-[11px] text-slate-500"
+              style={{ borderTop: '1px solid rgba(255,255,255,0.08)' }}
+            >
               <span>↑↓ 이동</span>
               <span>Tab / Enter 선택</span>
               <span>Esc 닫기</span>
