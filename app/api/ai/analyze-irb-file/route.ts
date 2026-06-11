@@ -148,6 +148,7 @@ export async function POST(req: NextRequest) {
           { status: 422 }
         )
       }
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const response = await anthropic.messages.create({
         model: 'claude-sonnet-4-5',
         max_tokens: 2048,
@@ -166,7 +167,7 @@ export async function POST(req: NextRequest) {
               { type: 'text', text: buildPdfInstruction(moduleList) },
             ],
           },
-        ],
+        ] as any,
       })
       rawText = response.content[0]?.type === 'text' ? response.content[0].text : ''
     } else {
