@@ -3,6 +3,7 @@ import { getServerSession } from 'next-auth'
 import { authOptions } from '@/lib/auth'
 import { prisma } from '@/lib/prisma'
 import { anthropic } from '@/lib/anthropic'
+import { generateText, isLuxiaProvider } from '@/lib/ai-client'
 import type { ModuleRecommendation } from '@/lib/irb/types'
 
 export const maxDuration = 60
@@ -132,29 +133,42 @@ export async function POST(req: NextRequest) {
   }))
 
   try {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    let messages: any[]
+    let rawText: string
 
     if (ext === 'txt') {
       const text = buffer.toString('utf-8')
-      messages = [{ role: 'user', content: buildTextPrompt(text, moduleList) }]
+      rawText = await generateText({
+        messages: [{ role: 'user', content: buildTextPrompt(text, moduleList) }],
+        maxTokens: 2048,
+      })
     } else if (ext === 'pdf') {
-      messages = [
-        {
-          role: 'user',
-          content: [
-            {
-              type: 'document',
-              source: {
-                type: 'base64',
-                media_type: 'application/pdf',
-                data: buffer.toString('base64'),
+      if (isLuxiaProvider()) {
+        return NextResponse.json(
+          { error: 'UnsupportedFormat', message: 'PDF 파일 분석은 Anthropic 제공자에서만 지원됩니다. AI_PROVIDER=anthropic으로 변경하거나 TXT/DOCX 파일을 사용해 주세요.' },
+          { status: 422 }
+        )
+      }
+      const response = await anthropic.messages.create({
+        model: 'claude-sonnet-4-5',
+        max_tokens: 2048,
+        messages: [
+          {
+            role: 'user',
+            content: [
+              {
+                type: 'document',
+                source: {
+                  type: 'base64',
+                  media_type: 'application/pdf',
+                  data: buffer.toString('base64'),
+                },
               },
-            },
-            { type: 'text', text: buildPdfInstruction(moduleList) },
-          ],
-        },
-      ]
+              { type: 'text', text: buildPdfInstruction(moduleList) },
+            ],
+          },
+        ],
+      })
+      rawText = response.content[0]?.type === 'text' ? response.content[0].text : ''
     } else {
       // DOCX
       const text = await extractDocxText(buffer)
@@ -164,16 +178,11 @@ export async function POST(req: NextRequest) {
           { status: 422 }
         )
       }
-      messages = [{ role: 'user', content: buildTextPrompt(text, moduleList) }]
+      rawText = await generateText({
+        messages: [{ role: 'user', content: buildTextPrompt(text, moduleList) }],
+        maxTokens: 2048,
+      })
     }
-
-    const response = await anthropic.messages.create({
-      model: 'claude-sonnet-4-5',
-      max_tokens: 2048,
-      messages,
-    })
-
-    const rawText = response.content[0]?.type === 'text' ? response.content[0].text : ''
     const recommendations = parseRecommendations(rawText)
 
     // Filter out any invalid moduleIds that aren't in our list

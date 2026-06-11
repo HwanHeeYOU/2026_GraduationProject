@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { getServerSession } from 'next-auth'
 import { authOptions } from '@/lib/auth'
 import { prisma } from '@/lib/prisma'
-import { anthropic } from '@/lib/anthropic'
+import { generateText, getAIProvider } from '@/lib/ai-client'
 import { buildIRBPrompt } from '@/lib/irb/buildPrompt'
 
 export const maxDuration = 30
@@ -37,8 +37,8 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'BadRequest', message: '필수 파라미터가 누락되었습니다.' }, { status: 400 })
   }
 
-  const model = 'claude-sonnet-4-5'
-  console.log('[ai/generate] req:', { projectId, moduleId, keywords, model })
+  const provider = getAIProvider()
+  console.log('[ai/generate] req:', { projectId, moduleId, keywords, provider })
 
   const startTime = Date.now()
 
@@ -61,11 +61,10 @@ export async function POST(req: NextRequest) {
 
     let content: string
     try {
-      const response = await Promise.race([
-        anthropic.messages.create({
-          model,
-          max_tokens: 1024,
+      content = await Promise.race([
+        generateText({
           messages: [{ role: 'user', content: prompt }],
+          maxTokens: 1024,
         }),
         new Promise<never>((_, reject) => {
           controller.signal.addEventListener('abort', () => reject(new Error('TIMEOUT')))
@@ -73,8 +72,6 @@ export async function POST(req: NextRequest) {
       ])
 
       clearTimeout(timeoutId)
-      const firstBlock = response.content[0]
-      content = firstBlock.type === 'text' ? firstBlock.text : ''
     } catch (err) {
       clearTimeout(timeoutId)
       if (err instanceof Error && err.message === 'TIMEOUT') {
