@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { useAutoSave } from '@/hooks/useAutoSave'
 import SaveStatusIndicator from './SaveStatusIndicator'
 import FormulaRenderer from './FormulaRenderer'
@@ -25,11 +25,16 @@ export interface ProjectModuleWithMeta {
 interface ModuleCardProps {
   module: ProjectModuleWithMeta
   projectId: string
+  externalContent?: string
 }
 
-export default function ModuleCard({ module, projectId }: ModuleCardProps) {
+export default function ModuleCard({ module, projectId, externalContent }: ModuleCardProps) {
   const { content, setContent, saveStatus } = useAutoSave(projectId, module.id, module.content)
   const [keywords, setKeywords] = useState('')
+
+  useEffect(() => {
+    if (externalContent !== undefined) setContent(externalContent)
+  }, [externalContent])
 
   const handleGenerated = (generated: string) => {
     setContent(generated)

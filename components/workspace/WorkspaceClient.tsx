@@ -1,9 +1,11 @@
 'use client'
 
+import { useState } from 'react'
 import Link from 'next/link'
 import { ArrowRight } from 'lucide-react'
 import DashboardLayout from '@/components/dashboard/DashboardLayout'
 import ModuleCard, { type ProjectModuleWithMeta } from './ModuleCard'
+import BulkGeneratePanel from './BulkGeneratePanel'
 import NetworkSyncProvider from './NetworkSyncProvider'
 
 interface WorkspaceClientProps {
@@ -21,6 +23,12 @@ export default function WorkspaceClient({
   modules,
   userName,
 }: WorkspaceClientProps) {
+  const [bulkContents, setBulkContents] = useState<Record<string, string>>({})
+
+  const handleBulkGenerated = (moduleId: string, content: string) => {
+    setBulkContents((prev) => ({ ...prev, [moduleId]: content }))
+  }
+
   return (
     <DashboardLayout userName={userName}>
       <NetworkSyncProvider>
@@ -40,6 +48,15 @@ export default function WorkspaceClient({
             </Link>
           </div>
 
+          {/* 일괄 AI 초안 생성 */}
+          {modules.length > 0 && (
+            <BulkGeneratePanel
+              modules={modules}
+              projectId={projectId}
+              onGenerated={handleBulkGenerated}
+            />
+          )}
+
           {/* 모듈 카드 그리드 */}
           {modules.length === 0 ? (
             <div className="glass-card p-8 text-center text-slate-400 text-sm">
@@ -48,7 +65,12 @@ export default function WorkspaceClient({
           ) : (
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               {modules.map((mod) => (
-                <ModuleCard key={mod.id} module={mod} projectId={projectId} />
+                <ModuleCard
+                  key={mod.id}
+                  module={mod}
+                  projectId={projectId}
+                  externalContent={bulkContents[mod.id]}
+                />
               ))}
             </div>
           )}
