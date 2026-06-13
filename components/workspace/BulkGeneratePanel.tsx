@@ -1,7 +1,7 @@
 'use client'
 
 import { useState } from 'react'
-import { Sparkles, Loader2, CheckCircle2, AlertCircle } from 'lucide-react'
+import { Loader2, CheckCircle2, AlertCircle } from 'lucide-react'
 import type { ProjectModuleWithMeta } from './ModuleCard'
 
 interface BulkGeneratePanelProps {
@@ -73,7 +73,6 @@ export default function BulkGeneratePanel({ modules, projectId, onGenerated }: B
   return (
     <div className="glass-card p-5 mb-6 space-y-4">
       <div className="flex items-center gap-2">
-        <Sparkles size={16} className="text-purple-400" />
         <h2 className="text-sm font-semibold text-white">실험 설명으로 전체 초안 생성</h2>
       </div>
 
@@ -101,10 +100,7 @@ export default function BulkGeneratePanel({ modules, projectId, onGenerated }: B
               생성 중...
             </>
           ) : (
-            <>
-              <Sparkles size={14} />
-              전체 모듈 AI 초안 생성 ({modules.length}개)
-            </>
+              <>전체 모듈 AI 초안 생성 ({modules.length}개)</>
           )}
         </button>
 

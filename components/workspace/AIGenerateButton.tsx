@@ -1,7 +1,7 @@
 'use client'
 
 import { useState } from 'react'
-import { Sparkles, Loader2, AlertCircle } from 'lucide-react'
+import { Loader2, AlertCircle } from 'lucide-react'
 
 interface AIGenerateButtonProps {
   moduleId: string
@@ -71,10 +71,7 @@ export default function AIGenerateButton({
             생성 중...
           </>
         ) : (
-          <>
-            <Sparkles size={14} />
-            AI 초안 생성
-          </>
+          <>AI 초안 생성</>
         )}
       </button>
       {error && (
