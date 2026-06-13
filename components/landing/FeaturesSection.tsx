@@ -1,18 +1,20 @@
+import { Building2, Sparkles, ClipboardCheck } from 'lucide-react'
+
 const features = [
   {
-    icon: '🏫',
+    icon: Building2,
     title: '학교별 맞춤',
     description:
       '소속 학교를 선택하면 해당 기관의 IRB 심의 기준에 맞는 항목이 자동으로 로드됩니다. 학교별 필수 항목을 놓치지 마세요.',
   },
   {
-    icon: '🤖',
+    icon: Sparkles,
     title: 'AI 초안 생성',
     description:
       'Claude Sonnet AI가 연구 키워드를 기반으로 각 IRB 항목에 최적화된 문장 초안을 자동으로 생성합니다.',
   },
   {
-    icon: '✅',
+    icon: ClipboardCheck,
     title: '최종 검토',
     description:
       '작성된 모든 항목을 한 페이지에서 검토하고 DOCX 또는 PDF로 즉시 내보낼 수 있습니다.',
@@ -42,17 +44,22 @@ export default function FeaturesSection() {
         </div>
 
         <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-          {features.map((feature) => (
-            <div key={feature.title} className="glass-card p-8 flex flex-col gap-4">
-              <div className="text-4xl">{feature.icon}</div>
-              <h3 className="text-white font-bold text-xl tracking-[-0.5px]">
-                {feature.title}
-              </h3>
-              <p className="text-white/60 text-sm leading-relaxed">
-                {feature.description}
-              </p>
-            </div>
-          ))}
+          {features.map((feature) => {
+            const Icon = feature.icon
+            return (
+              <div key={feature.title} className="glass-card p-8 flex flex-col gap-4">
+                <div className="w-10 h-10 rounded-xl bg-blue-600/20 border border-blue-500/30 flex items-center justify-center">
+                  <Icon size={20} className="text-blue-400" />
+                </div>
+                <h3 className="text-white font-bold text-xl tracking-[-0.5px]">
+                  {feature.title}
+                </h3>
+                <p className="text-white/60 text-sm leading-relaxed">
+                  {feature.description}
+                </p>
+              </div>
+            )
+          })}
         </div>
       </div>
     </section>

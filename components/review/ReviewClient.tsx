@@ -44,7 +44,7 @@ export default function ReviewClient({
 
   return (
     <DashboardLayout userName={userName}>
-      <div className="night-campus-bg min-h-full py-6 px-4">
+      <div className="py-2">
         {/* 상단 헤더 */}
         <div className="flex items-start justify-between gap-4 mb-6">
           <div>
