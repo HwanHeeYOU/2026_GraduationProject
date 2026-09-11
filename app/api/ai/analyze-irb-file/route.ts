@@ -4,7 +4,7 @@ import { authOptions } from '@/lib/auth'
 import { prisma } from '@/lib/prisma'
 import { anthropic } from '@/lib/anthropic'
 import { generateText, isLuxiaProvider } from '@/lib/ai-client'
-import type { ModuleRecommendation } from '@/lib/irb/types'
+import type { ModuleRecommendation, NewModuleSuggestion } from '@/lib/irb/types'
 
 export const maxDuration = 60
 
@@ -138,26 +138,78 @@ ${moduleList}
 다음 JSON 배열 형식으로만 응답해주세요. 다른 텍스트나 마크다운은 절대 포함하지 마세요:
 [
   {
+    "type": "matched",
     "moduleId": "module-01",
     "status": "required",
     "reason": "업로드한 양식에서 '연구 목적' 항목이 명시적으로 요구됩니다.",
     "matchedSection": "양식 1항: 연구 목적 및 필요성"
+  },
+  {
+    "type": "new",
+    "suggestedName": "유전자 정보 활용 동의",
+    "suggestedCategory": "동의서",
+    "suggestedDescription": "유전자 정보를 수집·활용하는 연구에서 별도로 받아야 하는 동의 항목",
+    "status": "required",
+    "reason": "위 목록의 어떤 모듈로도 표현되지 않는 항목을 이 양식이 명시적으로 요구합니다.",
+    "matchedSection": "양식 3항: 유전자 정보 활용 동의"
   }
 ]
 
 규칙:
+- "type": "matched"는 위 모듈 목록 중 하나와 대응될 때, "type": "new"는 목록의 어떤 항목으로도 표현되지 않는 새로운 요구사항을 발견했을 때 사용하세요
+- "matched"인 경우 moduleId는 반드시 위 목록에 있는 ID만 사용하고 suggested* 필드는 생략하세요
+- "new"인 경우 moduleId는 생략하고 suggestedName/suggestedCategory/suggestedDescription을 채우세요
 - "required": 문서에서 해당 항목을 명시적으로 요구하는 경우
 - "recommended": 문서 내용으로 미루어 작성이 권장되는 경우
-- 관련 없는 모듈은 포함하지 마세요
-- moduleId는 반드시 위 목록에 있는 ID만 사용하세요
+- 관련 없는 항목은 포함하지 마세요
 - 유효한 JSON 배열만 반환하세요`
 }
 
-function parseRecommendations(raw: string): ModuleRecommendation[] {
+interface RawAnalysisItem {
+  type?: 'matched' | 'new'
+  moduleId?: string
+  status: 'required' | 'recommended'
+  reason: string
+  matchedSection: string
+  suggestedName?: string
+  suggestedDescription?: string
+  suggestedCategory?: string
+}
+
+function parseAnalysisResult(raw: string): {
+  matched: ModuleRecommendation[]
+  newSuggestions: NewModuleSuggestion[]
+} {
   // Handle both bare JSON and markdown code blocks
   const match = raw.match(/```(?:json)?\s*(\[[\s\S]*?\])\s*```/) ?? raw.match(/(\[[\s\S]*\])/)
   if (!match) throw new Error('No JSON array in response')
-  return JSON.parse(match[1] ?? match[0])
+  const items: RawAnalysisItem[] = JSON.parse(match[1] ?? match[0])
+
+  const matched: ModuleRecommendation[] = []
+  const newSuggestions: NewModuleSuggestion[] = []
+
+  for (const item of items) {
+    if (item.type === 'new' || (!item.moduleId && item.suggestedName)) {
+      if (!item.suggestedName) continue
+      newSuggestions.push({
+        suggestedName: item.suggestedName,
+        suggestedDescription: item.suggestedDescription ?? '',
+        suggestedCategory: item.suggestedCategory ?? '기타',
+        status: item.status,
+        reason: item.reason,
+        matchedSection: item.matchedSection,
+      })
+    } else if (item.moduleId) {
+      matched.push({
+        moduleId: item.moduleId,
+        status: item.status,
+        reason: item.reason,
+        matchedSection: item.matchedSection,
+      })
+    }
+  }
+
+  return { matched, newSuggestions }
 }
 
 export async function POST(req: NextRequest) {
@@ -283,14 +335,18 @@ export async function POST(req: NextRequest) {
         maxTokens: 2048,
       })
     }
-    const recommendations = parseRecommendations(rawText)
+    const { matched, newSuggestions } = parseAnalysisResult(rawText)
 
     // Filter out any invalid moduleIds that aren't in our list
     const validIds = new Set(moduleList.map((m) => m.id))
-    const filtered = recommendations.filter((r) => validIds.has(r.moduleId))
+    const filtered = matched.filter((r) => validIds.has(r.moduleId))
 
-    console.log('[analyze-irb-file] recommendations:', filtered.length, 'for institution:', institutionId)
-    return NextResponse.json({ recommendations: filtered })
+    console.log(
+      '[analyze-irb-file] recommendations:', filtered.length,
+      'newSuggestions:', newSuggestions.length,
+      'for institution:', institutionId
+    )
+    return NextResponse.json({ recommendations: filtered, newSuggestions })
   } catch (error) {
     console.error('[analyze-irb-file] error:', error)
     return NextResponse.json(

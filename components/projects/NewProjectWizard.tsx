@@ -6,7 +6,7 @@ import { ArrowRight, ArrowLeft, CheckCircle } from 'lucide-react'
 import InstitutionSelector from './InstitutionSelector'
 import ModuleSelector from './ModuleSelector'
 import IRBFileUploader from './IRBFileUploader'
-import type { ModuleRecommendation } from '@/lib/irb/types'
+import type { ModuleRecommendation, NewModuleSuggestion } from '@/lib/irb/types'
 
 interface Institution {
   id: string
@@ -17,7 +17,7 @@ interface Institution {
 type AnalysisState =
   | { status: 'idle' }
   | { status: 'analyzing' }
-  | { status: 'done'; recommendations: ModuleRecommendation[] }
+  | { status: 'done'; recommendations: ModuleRecommendation[]; newSuggestions: NewModuleSuggestion[] }
   | { status: 'error'; message: string }
 
 type Step = 1 | 2
@@ -42,6 +42,8 @@ export default function NewProjectWizard() {
 
   const recommendations =
     analysisState.status === 'done' ? analysisState.recommendations : undefined
+  const newSuggestions =
+    analysisState.status === 'done' ? analysisState.newSuggestions : undefined
 
   // Auto-trigger analysis whenever files + institution are both set
   useEffect(() => {
@@ -74,14 +76,21 @@ export default function NewProjectWizard() {
           return
         }
 
-        const data: { recommendations: ModuleRecommendation[] } = await res.json()
+        const data: {
+          recommendations: ModuleRecommendation[]
+          newSuggestions?: NewModuleSuggestion[]
+        } = await res.json()
 
         const aiRequiredIds = data.recommendations
           .filter((r) => r.status === 'required')
           .map((r) => r.moduleId)
         setSelectedModuleIds((prev) => Array.from(new Set([...prev, ...aiRequiredIds])))
 
-        setAnalysisState({ status: 'done', recommendations: data.recommendations })
+        setAnalysisState({
+          status: 'done',
+          recommendations: data.recommendations,
+          newSuggestions: data.newSuggestions ?? [],
+        })
       } catch (err) {
         if (err instanceof Error && err.name === 'AbortError') return
         setAnalysisState({ status: 'error', message: '파일 분석에 실패했습니다.' })
@@ -208,6 +217,7 @@ export default function NewProjectWizard() {
               selectedIds={selectedModuleIds}
               onChange={setSelectedModuleIds}
               recommendations={recommendations}
+              newSuggestions={newSuggestions}
             />
 
             {submitError && (
