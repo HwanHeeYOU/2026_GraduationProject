@@ -12,7 +12,7 @@ interface IRBFileUploaderProps {
   onFilesChange: (files: File[]) => void
 }
 
-const ACCEPTED = '.pdf,.docx,.txt'
+const ACCEPTED = '.pdf,.docx,.txt,.hwp,.hwpx'
 const MAX_SIZE_MB = 10
 
 export default function IRBFileUploader({
@@ -46,7 +46,7 @@ export default function IRBFileUploader({
     <div className="space-y-2">
       <label className="block text-sm text-slate-200 font-medium mb-1.5">
         IRB 양식 / 가이드라인 파일 업로드
-        <span className="ml-1.5 text-slate-500 font-normal">(선택, PDF·DOCX·TXT · 여러 파일 가능)</span>
+        <span className="ml-1.5 text-slate-500 font-normal">(선택, PDF·DOCX·TXT·HWP·HWPX · 여러 파일 가능)</span>
       </label>
 
       {/* 드롭존 — 파일이 있어도 항상 표시 */}
@@ -58,7 +58,7 @@ export default function IRBFileUploader({
       >
         <Upload size={20} className="mx-auto mb-2 text-slate-500" />
         <p className="text-sm text-slate-300">클릭하거나 파일을 드래그하세요</p>
-        <p className="text-xs text-slate-500 mt-0.5">PDF, DOCX, TXT · 파일당 최대 {MAX_SIZE_MB}MB · 여러 파일 선택 가능</p>
+        <p className="text-xs text-slate-500 mt-0.5">PDF, DOCX, TXT, HWP, HWPX · 파일당 최대 {MAX_SIZE_MB}MB · 여러 파일 선택 가능</p>
         <input
           ref={inputRef}
           type="file"

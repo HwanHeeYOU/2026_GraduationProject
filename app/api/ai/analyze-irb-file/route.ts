@@ -20,6 +20,82 @@ async function extractDocxText(buffer: Buffer): Promise<string | null> {
   }
 }
 
+async function extractHwpText(buffer: Buffer): Promise<string | null> {
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { parse, TableControl } = await import('@hwp.js/parser') as any
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const collectParagraphText = (paragraphs: any): string[] => {
+      const lines: string[] = []
+      for (const paragraph of Array.from(paragraphs) as any[]) {
+        let line = ''
+        for (const char of paragraph.chars) line += char.toString()
+        line = line.trim()
+        if (line) lines.push(line)
+
+        for (const control of paragraph.controls ?? []) {
+          if (control instanceof TableControl) {
+            for (const cell of control.cells) {
+              lines.push(...collectParagraphText(cell.paragraphs))
+            }
+          }
+        }
+      }
+      return lines
+    }
+
+    const document = parse(buffer)
+    const lines: string[] = []
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    for (const section of document.sections as any[]) {
+      lines.push(...collectParagraphText(section.paragraphs))
+    }
+
+    const result = lines.join('\n').trim()
+    return result || null
+  } catch {
+    return null
+  }
+}
+
+async function extractHwpxText(buffer: Buffer): Promise<string | null> {
+  try {
+    const JSZip = (await import('jszip')).default
+    const zip = await JSZip.loadAsync(buffer)
+
+    const sectionFiles = Object.keys(zip.files)
+      .filter((name) => /^Contents\/section\d+\.xml$/i.test(name))
+      .sort((a, b) => {
+        const na = Number(a.match(/(\d+)/)?.[1] ?? 0)
+        const nb = Number(b.match(/(\d+)/)?.[1] ?? 0)
+        return na - nb
+      })
+
+    if (sectionFiles.length === 0) return null
+
+    const texts: string[] = []
+    for (const name of sectionFiles) {
+      const xml = await zip.files[name].async('text')
+      const matches = Array.from(xml.matchAll(/<hp:t[^>]*>([\s\S]*?)<\/hp:t>/g))
+      for (const m of matches) {
+        const decoded = m[1]
+          .replace(/&lt;/g, '<')
+          .replace(/&gt;/g, '>')
+          .replace(/&quot;/g, '"')
+          .replace(/&apos;/g, "'")
+          .replace(/&amp;/g, '&')
+        if (decoded) texts.push(decoded)
+      }
+    }
+
+    const result = texts.join('\n').trim()
+    return result || null
+  } catch {
+    return null
+  }
+}
+
 function buildTextPrompt(
   documentText: string,
   modules: { id: string; name: string; description: string; category: string }[]
@@ -38,15 +114,20 @@ ${buildInstruction(moduleList)}`
 }
 
 function buildPdfInstruction(
-  modules: { id: string; name: string; description: string; category: string }[]
+  modules: { id: string; name: string; description: string; category: string }[],
+  extraText?: string
 ): string {
   const moduleList = modules
     .map((m) => `- ID: ${m.id} / 이름: ${m.name} / 설명: ${m.description} / 카테고리: ${m.category}`)
     .join('\n')
 
+  const extraSection = extraText
+    ? `\n=== 추가로 첨부된 문서 내용 ===\n${extraText.slice(0, 8000)}\n`
+    : ''
+
   return `당신은 IRB(기관생명윤리위원회) 심의 서류 분석 전문가입니다.
 위 PDF 문서를 분석하여, 제공된 IRB 모듈 목록 중 이 양식·가이드라인에서 필요로 하는 항목을 판단해주세요.
-
+${extraSection}
 ${buildInstruction(moduleList)}`
 }
 
@@ -92,28 +173,37 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'BadRequest', message: '요청 형식이 올바르지 않습니다.' }, { status: 400 })
   }
 
-  const file = formData.get('file') as File | null
+  const files = formData.getAll('file').filter((f): f is File => f instanceof File)
   const institutionId = formData.get('institutionId') as string | null
 
-  if (!file || !institutionId) {
+  if (files.length === 0 || !institutionId) {
     return NextResponse.json({ error: 'BadRequest', message: '파일과 기관 ID가 필요합니다.' }, { status: 400 })
   }
 
-  const ext = file.name.split('.').pop()?.toLowerCase() ?? ''
-  if (!['pdf', 'docx', 'txt'].includes(ext)) {
-    return NextResponse.json(
-      { error: 'UnsupportedFormat', message: 'PDF, DOCX, TXT 파일만 지원합니다.' },
-      { status: 400 }
-    )
+  const SUPPORTED_EXTS = ['pdf', 'docx', 'txt', 'hwp', 'hwpx']
+  for (const f of files) {
+    const ext = f.name.split('.').pop()?.toLowerCase() ?? ''
+    if (!SUPPORTED_EXTS.includes(ext)) {
+      return NextResponse.json(
+        { error: 'UnsupportedFormat', message: 'PDF, DOCX, TXT, HWP, HWPX 파일만 지원합니다.' },
+        { status: 400 }
+      )
+    }
+    if (f.size > MAX_FILE_SIZE) {
+      return NextResponse.json(
+        { error: 'FileTooLarge', message: '파일 크기는 10MB 이하여야 합니다.' },
+        { status: 400 }
+      )
+    }
   }
 
-  const buffer = Buffer.from(await file.arrayBuffer())
-  if (buffer.length > MAX_FILE_SIZE) {
-    return NextResponse.json(
-      { error: 'FileTooLarge', message: '파일 크기는 10MB 이하여야 합니다.' },
-      { status: 400 }
-    )
-  }
+  const entries = await Promise.all(
+    files.map(async (f) => ({
+      name: f.name,
+      ext: f.name.split('.').pop()?.toLowerCase() ?? '',
+      buffer: Buffer.from(await f.arrayBuffer()),
+    }))
+  )
 
   const institutionModules = await prisma.institutionModule.findMany({
     where: { institutionId },
@@ -133,54 +223,63 @@ export async function POST(req: NextRequest) {
   }))
 
   try {
+    const pdfEntries = entries.filter((e) => e.ext === 'pdf')
+    const textEntries = entries.filter((e) => e.ext !== 'pdf')
+
+    const extractedTexts: string[] = []
+    for (const entry of textEntries) {
+      let text: string | null = null
+      if (entry.ext === 'txt') {
+        text = entry.buffer.toString('utf-8').trim() || null
+      } else if (entry.ext === 'docx') {
+        text = await extractDocxText(entry.buffer)
+      } else if (entry.ext === 'hwp') {
+        text = await extractHwpText(entry.buffer)
+      } else if (entry.ext === 'hwpx') {
+        text = await extractHwpxText(entry.buffer)
+      }
+      if (text) {
+        extractedTexts.push(`=== 파일: ${entry.name} ===\n${text}`)
+      }
+    }
+
+    if (pdfEntries.length === 0 && extractedTexts.length === 0) {
+      return NextResponse.json(
+        { error: 'ParseError', message: '첨부한 파일에서 텍스트를 읽을 수 없습니다. 다른 형식으로 변환 후 시도해 주세요.' },
+        { status: 422 }
+      )
+    }
+
+    const combinedText = extractedTexts.join('\n\n')
     let rawText: string
 
-    if (ext === 'txt') {
-      const text = buffer.toString('utf-8')
-      rawText = await generateText({
-        messages: [{ role: 'user', content: buildTextPrompt(text, moduleList) }],
-        maxTokens: 2048,
-      })
-    } else if (ext === 'pdf') {
+    if (pdfEntries.length > 0) {
       if (isLuxiaProvider()) {
         return NextResponse.json(
-          { error: 'UnsupportedFormat', message: 'PDF 파일 분석은 Anthropic 제공자에서만 지원됩니다. AI_PROVIDER=anthropic으로 변경하거나 TXT/DOCX 파일을 사용해 주세요.' },
+          { error: 'UnsupportedFormat', message: 'PDF 파일 분석은 Anthropic 제공자에서만 지원됩니다. AI_PROVIDER=anthropic으로 변경하거나 TXT/DOCX/HWP 파일을 사용해 주세요.' },
           { status: 422 }
         )
       }
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const content: any[] = pdfEntries.map((entry) => ({
+        type: 'document',
+        source: {
+          type: 'base64',
+          media_type: 'application/pdf',
+          data: entry.buffer.toString('base64'),
+        },
+      }))
+      content.push({ type: 'text', text: buildPdfInstruction(moduleList, combinedText || undefined) })
+
       const response = await anthropic.messages.create({
         model: 'claude-sonnet-4-5',
         max_tokens: 2048,
-        messages: [
-          {
-            role: 'user',
-            content: [
-              {
-                type: 'document',
-                source: {
-                  type: 'base64',
-                  media_type: 'application/pdf',
-                  data: buffer.toString('base64'),
-                },
-              },
-              { type: 'text', text: buildPdfInstruction(moduleList) },
-            ],
-          },
-        ] as any,
+        messages: [{ role: 'user', content }] as any,
       })
       rawText = response.content[0]?.type === 'text' ? response.content[0].text : ''
     } else {
-      // DOCX
-      const text = await extractDocxText(buffer)
-      if (!text) {
-        return NextResponse.json(
-          { error: 'ParseError', message: 'DOCX 파일을 읽을 수 없습니다. PDF 또는 TXT 형식으로 변환 후 시도해 주세요.' },
-          { status: 422 }
-        )
-      }
       rawText = await generateText({
-        messages: [{ role: 'user', content: buildTextPrompt(text, moduleList) }],
+        messages: [{ role: 'user', content: buildTextPrompt(combinedText, moduleList) }],
         maxTokens: 2048,
       })
     }
