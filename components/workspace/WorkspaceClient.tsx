@@ -1,12 +1,13 @@
 'use client'
 
 import { useState, useRef, useCallback } from 'react'
-import { useRouter } from 'next/navigation'
 import { ArrowRight } from 'lucide-react'
 import DashboardLayout from '@/components/dashboard/DashboardLayout'
 import ModuleCard, { type ProjectModuleWithMeta } from './ModuleCard'
 import BulkGeneratePanel from './BulkGeneratePanel'
 import NetworkSyncProvider from './NetworkSyncProvider'
+
+const SESSION_KEY = 'irb_research_description'
 
 interface WorkspaceClientProps {
   projectId: string
@@ -23,32 +24,75 @@ export default function WorkspaceClient({
   modules,
   userName,
 }: WorkspaceClientProps) {
-  const router = useRouter()
   const [bulkContents, setBulkContents] = useState<Record<string, string>>({})
   const [navigating, setNavigating] = useState(false)
+  const [navStep, setNavStep] = useState<'idle' | 'saving' | 'summarizing'>('idle')
 
-  // 각 ModuleCard의 flushSave 함수를 등록받는 registry
+  // 각 ModuleCard의 flushSave / getContent 함수 registry
   const flushRegistry = useRef<Map<string, () => Promise<void>>>(new Map())
+  const contentRegistry = useRef<Map<string, () => string>>(new Map())
 
   const registerFlush = useCallback((moduleId: string, fn: () => Promise<void>) => {
     flushRegistry.current.set(moduleId, fn)
     return () => flushRegistry.current.delete(moduleId)
   }, [])
 
+  const registerGetContent = useCallback((moduleId: string, fn: () => string) => {
+    contentRegistry.current.set(moduleId, fn)
+    return () => contentRegistry.current.delete(moduleId)
+  }, [])
+
   const handleBulkGenerated = (moduleId: string, content: string) => {
     setBulkContents((prev) => ({ ...prev, [moduleId]: content }))
   }
 
-  // 최종검토 클릭 시 모든 미저장 내용을 즉시 저장 후 이동
   const handleReviewClick = async () => {
     setNavigating(true)
+    setNavStep('saving')
+
+    // Step 1: 모든 모듈 즉시 저장
     try {
       await Promise.all(Array.from(flushRegistry.current.values()).map((fn) => fn()))
     } catch {
-      // flush 실패해도 이동은 진행
+      // 저장 실패해도 계속 진행
     }
+
+    // Step 2: 현재 모든 모듈 내용 수집
+    const moduleContents = modules.map((mod) => {
+      const getContent = contentRegistry.current.get(mod.id)
+      return {
+        name: mod.module.name,
+        content: getContent ? getContent() : mod.content,
+      }
+    }).filter((m) => m.content.trim().length > 0)
+
+    // Step 3: 내용이 있으면 AI 요약 → sessionStorage 저장
+    if (moduleContents.length > 0) {
+      setNavStep('summarizing')
+      try {
+        const res = await fetch('/api/ai/summarize-modules', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ modules: moduleContents }),
+        })
+        if (res.ok) {
+          const data = await res.json() as { summary: string }
+          if (data.summary) {
+            try { sessionStorage.setItem(SESSION_KEY, data.summary) } catch {}
+          }
+        }
+      } catch {
+        // 요약 실패해도 이동은 진행 — 기존 sessionStorage 값 유지
+      }
+    }
+
     window.location.href = `/projects/${projectId}/review`
   }
+
+  const navLabel =
+    navStep === 'saving' ? '저장 중...' :
+    navStep === 'summarizing' ? '내용 정리 중...' :
+    '최종 검토'
 
   return (
     <DashboardLayout userName={userName}>
@@ -65,7 +109,7 @@ export default function WorkspaceClient({
               disabled={navigating}
               className="cta-primary flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm text-white font-medium shrink-0 disabled:opacity-60"
             >
-              {navigating ? '저장 중...' : '최종 검토'}
+              {navLabel}
               <ArrowRight size={14} />
             </button>
           </div>
@@ -93,6 +137,7 @@ export default function WorkspaceClient({
                   projectId={projectId}
                   externalContent={bulkContents[mod.id]}
                   onRegisterFlush={registerFlush}
+                  onRegisterGetContent={registerGetContent}
                 />
               ))}
             </div>

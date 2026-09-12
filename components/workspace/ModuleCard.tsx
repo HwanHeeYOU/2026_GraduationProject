@@ -27,9 +27,10 @@ interface ModuleCardProps {
   projectId: string
   externalContent?: string
   onRegisterFlush?: (moduleId: string, fn: () => Promise<void>) => () => void
+  onRegisterGetContent?: (moduleId: string, fn: () => string) => () => void
 }
 
-export default function ModuleCard({ module, projectId, externalContent, onRegisterFlush }: ModuleCardProps) {
+export default function ModuleCard({ module, projectId, externalContent, onRegisterFlush, onRegisterGetContent }: ModuleCardProps) {
   const { content, setContent, saveStatus, flushSave } = useAutoSave(projectId, module.id, module.content)
   const [keywords, setKeywords] = useState('')
 
@@ -39,6 +40,13 @@ export default function ModuleCard({ module, projectId, externalContent, onRegis
     const unregister = onRegisterFlush(module.id, flushSave)
     return unregister
   }, [module.id, flushSave, onRegisterFlush])
+
+  // 현재 content 읽기 함수를 부모에 등록
+  useEffect(() => {
+    if (!onRegisterGetContent) return
+    const unregister = onRegisterGetContent(module.id, () => content)
+    return unregister
+  }, [module.id, content, onRegisterGetContent])
 
   useEffect(() => {
     if (externalContent !== undefined) setContent(externalContent)
