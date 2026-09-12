@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import { useAutoSave } from '@/hooks/useAutoSave'
 import SaveStatusIndicator from './SaveStatusIndicator'
 import FormulaRenderer from './FormulaRenderer'
@@ -26,19 +26,27 @@ interface ModuleCardProps {
   module: ProjectModuleWithMeta
   projectId: string
   externalContent?: string
+  onRegisterFlush?: (moduleId: string, fn: () => Promise<void>) => () => void
 }
 
-export default function ModuleCard({ module, projectId, externalContent }: ModuleCardProps) {
-  const { content, setContent, saveStatus } = useAutoSave(projectId, module.id, module.content)
+export default function ModuleCard({ module, projectId, externalContent, onRegisterFlush }: ModuleCardProps) {
+  const { content, setContent, saveStatus, flushSave } = useAutoSave(projectId, module.id, module.content)
   const [keywords, setKeywords] = useState('')
+
+  // flush 함수를 부모에 등록
+  useEffect(() => {
+    if (!onRegisterFlush) return
+    const unregister = onRegisterFlush(module.id, flushSave)
+    return unregister
+  }, [module.id, flushSave, onRegisterFlush])
 
   useEffect(() => {
     if (externalContent !== undefined) setContent(externalContent)
   }, [externalContent])
 
-  const handleGenerated = (generated: string) => {
+  const handleGenerated = useCallback((generated: string) => {
     setContent(generated)
-  }
+  }, [setContent])
 
   return (
     <div className="glass-card p-5 flex flex-col gap-4">

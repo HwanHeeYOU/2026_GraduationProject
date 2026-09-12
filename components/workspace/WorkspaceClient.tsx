@@ -1,7 +1,7 @@
 'use client'
 
-import { useState } from 'react'
-import Link from 'next/link'
+import { useState, useRef, useCallback } from 'react'
+import { useRouter } from 'next/navigation'
 import { ArrowRight } from 'lucide-react'
 import DashboardLayout from '@/components/dashboard/DashboardLayout'
 import ModuleCard, { type ProjectModuleWithMeta } from './ModuleCard'
@@ -23,10 +23,31 @@ export default function WorkspaceClient({
   modules,
   userName,
 }: WorkspaceClientProps) {
+  const router = useRouter()
   const [bulkContents, setBulkContents] = useState<Record<string, string>>({})
+  const [navigating, setNavigating] = useState(false)
+
+  // 각 ModuleCard의 flushSave 함수를 등록받는 registry
+  const flushRegistry = useRef<Map<string, () => Promise<void>>>(new Map())
+
+  const registerFlush = useCallback((moduleId: string, fn: () => Promise<void>) => {
+    flushRegistry.current.set(moduleId, fn)
+    return () => flushRegistry.current.delete(moduleId)
+  }, [])
 
   const handleBulkGenerated = (moduleId: string, content: string) => {
     setBulkContents((prev) => ({ ...prev, [moduleId]: content }))
+  }
+
+  // 최종검토 클릭 시 모든 미저장 내용을 즉시 저장 후 이동
+  const handleReviewClick = async () => {
+    setNavigating(true)
+    try {
+      await Promise.all(Array.from(flushRegistry.current.values()).map((fn) => fn()))
+    } catch {
+      // flush 실패해도 이동은 진행
+    }
+    window.location.href = `/projects/${projectId}/review`
   }
 
   return (
@@ -39,13 +60,14 @@ export default function WorkspaceClient({
               <h1 className="text-xl font-bold text-white">{projectName}</h1>
               <p className="text-sm text-slate-400 mt-0.5">{institutionName}</p>
             </div>
-            <Link
-              href={`/projects/${projectId}/review`}
-              className="cta-primary flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm text-white font-medium shrink-0"
+            <button
+              onClick={handleReviewClick}
+              disabled={navigating}
+              className="cta-primary flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm text-white font-medium shrink-0 disabled:opacity-60"
             >
-              최종 검토
+              {navigating ? '저장 중...' : '최종 검토'}
               <ArrowRight size={14} />
-            </Link>
+            </button>
           </div>
 
           {/* 실험 설명으로 전체 모듈 일괄 생성 */}
@@ -70,6 +92,7 @@ export default function WorkspaceClient({
                   module={mod}
                   projectId={projectId}
                   externalContent={bulkContents[mod.id]}
+                  onRegisterFlush={registerFlush}
                 />
               ))}
             </div>
