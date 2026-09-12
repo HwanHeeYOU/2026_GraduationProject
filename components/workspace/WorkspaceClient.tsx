@@ -6,6 +6,7 @@ import { ArrowRight } from 'lucide-react'
 import DashboardLayout from '@/components/dashboard/DashboardLayout'
 import ModuleCard, { type ProjectModuleWithMeta } from './ModuleCard'
 import BulkGeneratePanel from './BulkGeneratePanel'
+import IRBFormDraftPanel from './IRBFormDraftPanel'
 import NetworkSyncProvider from './NetworkSyncProvider'
 
 interface WorkspaceClientProps {
@@ -48,7 +49,10 @@ export default function WorkspaceClient({
             </Link>
           </div>
 
-          {/* 일괄 AI 초안 생성 */}
+          {/* IRB 서류 자동 초안 생성 (파일 업로드 → 질문 → 파일별 출력) */}
+          <IRBFormDraftPanel />
+
+          {/* 실험 설명으로 전체 모듈 일괄 생성 */}
           {modules.length > 0 && (
             <BulkGeneratePanel
               modules={modules}
