@@ -7,7 +7,7 @@ import type { IRBFormDraftOutput } from '@/lib/irb/types'
 type Phase =
   | { status: 'idle' }
   | { status: 'extracting' }
-  | { status: 'generating' }
+  | { status: 'generating'; completed: number; total: number }
   | { status: 'done'; output: IRBFormDraftOutput }
   | { status: 'error'; message: string }
 
@@ -65,7 +65,7 @@ export default function IRBFormDraftPanel() {
       const extracted = await res1.json() as import('@/lib/irb/types').IRBFormDraftResult
 
       // Step 2: 연구 설명 → 파일별 초안 생성
-      setPhase({ status: 'generating' })
+      setPhase({ status: 'generating', completed: 0, total: extracted.fileSections.length })
       const res2 = await fetch('/api/ai/irb-form-draft', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -104,6 +104,28 @@ export default function IRBFormDraftPanel() {
   }
 
   const isRunning = phase.status === 'extracting' || phase.status === 'generating'
+
+  // [작성 필요: 추가 정보 입력 요망] 를 붉은색으로 강조
+  const MISSING = '[작성 필요: 추가 정보 입력 요망]'
+  const renderAnswer = (text: string) => {
+    if (!text) return <span className="text-slate-500 italic">생성된 답변이 없습니다.</span>
+    const parts = text.split(MISSING)
+    if (parts.length === 1) return <span>{text}</span>
+    return (
+      <>
+        {parts.map((part, i) => (
+          <span key={i}>
+            {part}
+            {i < parts.length - 1 && (
+              <span className="text-red-400 font-semibold bg-red-500/10 rounded px-1 py-0.5 text-xs">
+                {MISSING}
+              </span>
+            )}
+          </span>
+        ))}
+      </>
+    )
+  }
 
   return (
     <div className="glass-card p-5 mb-6 space-y-4">
@@ -202,18 +224,24 @@ export default function IRBFormDraftPanel() {
         <div className="space-y-3">
           <div className="flex items-center gap-2 text-sm text-blue-400">
             <Loader2 size={15} className="animate-spin" />
-            {phase.status === 'extracting' ? '파일에서 문항 분석 중...' : 'AI가 각 문항 답변 작성 중...'}
+            {phase.status === 'extracting'
+              ? '파일에서 문항 분석 중...'
+              : `AI가 파일별 답변 작성 중... (${phase.completed}/${phase.total})`}
           </div>
           <div className="w-full h-1.5 rounded-full bg-white/10 overflow-hidden">
             <div
               className="h-full bg-blue-500 rounded-full transition-all duration-500"
-              style={{ width: phase.status === 'extracting' ? '35%' : '75%' }}
+              style={{
+                width: phase.status === 'extracting'
+                  ? '30%'
+                  : `${30 + (phase.completed / Math.max(phase.total, 1)) * 70}%`
+              }}
             />
           </div>
           <p className="text-xs text-slate-500">
             {phase.status === 'extracting'
-              ? '파일 내 문항 구조를 파악하고 있습니다...'
-              : '연구 설명을 바탕으로 문항별 답변을 생성하고 있습니다...'}
+              ? '각 파일의 문항 구조를 개별 분석하고 있습니다...'
+              : `파일별로 독립 처리 중 — 문항 누락 없이 생성됩니다`}
           </p>
         </div>
       )}
@@ -223,10 +251,21 @@ export default function IRBFormDraftPanel() {
         <div className="space-y-4">
           {/* 액션 바 */}
           <div className="flex items-center justify-between">
-            <p className="flex items-center gap-1.5 text-xs text-emerald-400">
-              <CheckCircle2 size={13} />
-              {phase.output.sections.length}개 파일 초안 생성 완료 — 각 답변을 복사해서 HWP에 붙여넣으세요
-            </p>
+            <div className="space-y-0.5">
+              <p className="flex items-center gap-1.5 text-xs text-emerald-400">
+                <CheckCircle2 size={13} />
+                {phase.output.sections.length}개 파일 초안 생성 완료
+              </p>
+              {(() => {
+                const missingCount = phase.output.sections.reduce((acc, s) =>
+                  acc + s.items.filter((i) => i.answer.includes(MISSING)).length, 0)
+                return missingCount > 0 ? (
+                  <p className="text-xs text-red-400">
+                    ⚠ {missingCount}개 문항에 추가 정보가 필요합니다 — 붉은 표시 항목을 직접 수정하세요
+                  </p>
+                ) : null
+              })()}
+            </div>
             <div className="flex items-center gap-2">
               <button
                 onClick={() => handleCopy(phase.output.rawText, '__all__')}
@@ -283,7 +322,7 @@ export default function IRBFormDraftPanel() {
                             className="text-sm text-white leading-relaxed whitespace-pre-wrap rounded-lg px-3 py-3 pr-10"
                             style={{ background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.08)' }}
                           >
-                            {item.answer || <span className="text-slate-500 italic">생성된 답변이 없습니다.</span>}
+                            {renderAnswer(item.answer)}
                           </div>
                           {item.answer && (
                             <button
