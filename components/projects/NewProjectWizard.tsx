@@ -138,7 +138,7 @@ export default function NewProjectWizard() {
         throw new Error((data as { message?: string }).message ?? '프로젝트 생성에 실패했습니다.')
       }
       const project = await res.json()
-      router.push(`/projects/${(project as { id: string }).id}/workspace`)
+      window.location.href = `/projects/${(project as { id: string }).id}/workspace`
     } catch (e) {
       setSubmitError(e instanceof Error ? e.message : '프로젝트 생성에 실패했습니다. 다시 시도해 주세요.')
     } finally {
