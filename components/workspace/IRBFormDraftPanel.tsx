@@ -1,33 +1,37 @@
 'use client'
 
-import { useState, useRef } from 'react'
+import { useState, useRef, useEffect } from 'react'
 import { Upload, FileText, X, Loader2, CheckCircle2, AlertCircle, Copy, Check, ChevronDown, ChevronUp } from 'lucide-react'
 import type { IRBFormDraftOutput } from '@/lib/irb/types'
 
 type Phase =
   | { status: 'idle' }
-  | { status: 'extracting' }   // 파일 분석 중
-  | { status: 'generating' }   // AI 초안 생성 중
+  | { status: 'extracting' }
+  | { status: 'generating' }
   | { status: 'done'; output: IRBFormDraftOutput }
   | { status: 'error'; message: string }
 
 const ACCEPTED = '.pdf,.docx,.txt,.hwp,.hwpx'
 const MAX_MB = 10
+const SESSION_KEY = 'irb_research_description'
 
-interface IRBFormDraftPanelProps {
-  // 1단계에서 이미 업로드된 파일이 있으면 외부에서 주입 가능 (선택)
-  initialFiles?: File[]
-}
-
-export default function IRBFormDraftPanel({ initialFiles }: IRBFormDraftPanelProps) {
-  const [files, setFiles] = useState<File[]>(initialFiles ?? [])
+export default function IRBFormDraftPanel() {
+  const [files, setFiles] = useState<File[]>([])
   const [description, setDescription] = useState('')
   const [phase, setPhase] = useState<Phase>({ status: 'idle' })
   const [copiedKey, setCopiedKey] = useState<string | null>(null)
   const [openSections, setOpenSections] = useState<Record<string, boolean>>({})
   const inputRef = useRef<HTMLInputElement>(null)
 
-  // ── 파일 관리 ──────────────────────────────────────────────
+  // 워크스페이스에서 입력한 연구 설명 자동 주입
+  useEffect(() => {
+    try {
+      const saved = sessionStorage.getItem(SESSION_KEY)
+      if (saved) setDescription(saved)
+    } catch {}
+  }, [])
+
+  // ── 파일 관리 ────────────────────────────────────────────
   const addFiles = (incoming: FileList | null) => {
     if (!incoming) return
     const existing = new Set(files.map((f) => f.name))
@@ -39,53 +43,50 @@ export default function IRBFormDraftPanel({ initialFiles }: IRBFormDraftPanelPro
 
   const removeFile = (name: string) => {
     setFiles((prev) => prev.filter((f) => f.name !== name))
-    if (phase.status === 'done' || phase.status === 'error') setPhase({ status: 'idle' })
+    if (phase.status !== 'idle') setPhase({ status: 'idle' })
   }
 
-  // ── 메인 실행: 파일 + 연구설명 → AI 초안 ──────────────────
+  // ── 메인: 파일 분석 → AI 초안 생성 ──────────────────────
   const handleGenerate = async () => {
     if (files.length === 0 || !description.trim()) return
 
-    // Step 1: 파일에서 문항 추출
+    // Step 1: 파일 → 문항 추출
     setPhase({ status: 'extracting' })
     const formData = new FormData()
     files.forEach((f) => formData.append('file', f))
 
-    let fileSections: import('@/lib/irb/types').IRBFormDraftResult['fileSections']
     try {
-      const res = await fetch('/api/ai/irb-form-draft', { method: 'POST', body: formData })
-      if (!res.ok) {
-        const d = await res.json().catch(() => ({}))
-        setPhase({ status: 'error', message: d.message ?? '문항 추출에 실패했습니다.' })
+      const res1 = await fetch('/api/ai/irb-form-draft', { method: 'POST', body: formData })
+      if (!res1.ok) {
+        const d = await res1.json().catch(() => ({}))
+        setPhase({ status: 'error', message: (d as {message?:string}).message ?? '문항 추출에 실패했습니다.' })
         return
       }
-      const data: import('@/lib/irb/types').IRBFormDraftResult = await res.json()
-      fileSections = data.fileSections
+      const extracted = await res1.json() as import('@/lib/irb/types').IRBFormDraftResult
 
-      // 모든 질문의 답변을 연구 설명으로 채워서 AI에게 전달
-      const answers: Record<string, string> = {}
-      data.questions.forEach((q) => { answers[q.key] = description })
-
-      // Step 2: AI 초안 생성
+      // Step 2: 연구 설명 → 파일별 초안 생성
       setPhase({ status: 'generating' })
       const res2 = await fetch('/api/ai/irb-form-draft', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ fileSections, answers }),
+        body: JSON.stringify({
+          fileSections: extracted.fileSections,
+          researchDescription: description,
+        }),
       })
       if (!res2.ok) {
         const d = await res2.json().catch(() => ({}))
-        setPhase({ status: 'error', message: d.message ?? '초안 생성에 실패했습니다.' })
+        setPhase({ status: 'error', message: (d as {message?:string}).message ?? '초안 생성에 실패했습니다.' })
         return
       }
-      const output: IRBFormDraftOutput = await res2.json()
+      const output = await res2.json() as IRBFormDraftOutput
       setPhase({ status: 'done', output })
 
       // 모든 섹션 펼치기
       const all: Record<string, boolean> = {}
       output.sections.forEach((s) => { all[s.fileName] = true })
       setOpenSections(all)
-    } catch {
+    } catch (e) {
       setPhase({ status: 'error', message: '서버 오류가 발생했습니다. 다시 시도해주세요.' })
     }
   }
@@ -98,8 +99,7 @@ export default function IRBFormDraftPanel({ initialFiles }: IRBFormDraftPanelPro
 
   const handleReset = () => {
     setPhase({ status: 'idle' })
-    setFiles(initialFiles ?? [])
-    setDescription('')
+    setFiles([])
     setOpenSections({})
   }
 
@@ -107,21 +107,23 @@ export default function IRBFormDraftPanel({ initialFiles }: IRBFormDraftPanelPro
 
   return (
     <div className="glass-card p-5 mb-6 space-y-4">
-      {/* 헤더 */}
       <div>
         <h2 className="text-sm font-semibold text-white">IRB 서류 자동 초안 생성</h2>
         <p className="text-xs text-slate-400 mt-0.5">
-          학교에서 받은 IRB 빈 양식 파일을 올리고, 연구 내용을 설명하면 각 문항의 답변을 자동 생성합니다.
+          학교에서 받은 IRB 빈 양식 파일을 업로드하면, 연구 설명을 바탕으로 각 문항의 답변을 자동 생성합니다.
         </p>
       </div>
 
-      {/* ── 입력 영역 (idle / error) ── */}
+      {/* ── 입력 영역 ── */}
       {(phase.status === 'idle' || phase.status === 'error') && (
-        <div className="space-y-3">
+        <div className="space-y-4">
 
-          {/* 파일 업로드 */}
+          {/* ① 파일 업로드 */}
           <div>
-            <p className="text-xs text-slate-300 font-medium mb-1.5">① IRB 빈 양식 파일 업로드</p>
+            <p className="text-xs text-slate-300 font-medium mb-2">
+              ① IRB 빈 양식 파일 업로드
+              <span className="ml-1 text-slate-500 font-normal">(처음 단계에서 올린 파일을 다시 업로드하세요)</span>
+            </p>
             <div
               className="border border-dashed border-white/20 rounded-xl p-4 text-center cursor-pointer hover:border-blue-400/50 hover:bg-white/[0.03] transition-colors"
               onClick={() => inputRef.current?.click()}
@@ -129,8 +131,8 @@ export default function IRBFormDraftPanel({ initialFiles }: IRBFormDraftPanelPro
               onDragOver={(e) => e.preventDefault()}
             >
               <Upload size={16} className="mx-auto mb-1 text-slate-500" />
-              <p className="text-sm text-slate-300">파일을 드래그하거나 클릭해서 추가</p>
-              <p className="text-xs text-slate-500 mt-0.5">PDF · DOCX · TXT · HWP · HWPX · 여러 파일 가능</p>
+              <p className="text-sm text-slate-300">파일 드래그 또는 클릭</p>
+              <p className="text-xs text-slate-500 mt-0.5">PDF · DOCX · TXT · HWP · HWPX</p>
               <input
                 ref={inputRef}
                 type="file"
@@ -148,7 +150,7 @@ export default function IRBFormDraftPanel({ initialFiles }: IRBFormDraftPanelPro
                   <li key={f.name} className="flex items-center gap-2 px-3 py-2 rounded-lg bg-white/5 border border-white/10">
                     <FileText size={13} className="shrink-0 text-slate-400" />
                     <span className="flex-1 text-sm text-white truncate">{f.name}</span>
-                    <span className="text-xs text-slate-500 shrink-0">{(f.size / 1024 / 1024).toFixed(1)}MB</span>
+                    <span className="text-xs text-slate-500 shrink-0">{(f.size/1024/1024).toFixed(1)}MB</span>
                     <button type="button" onClick={() => removeFile(f.name)}
                       className="shrink-0 text-slate-500 hover:text-slate-300">
                       <X size={13} />
@@ -159,13 +161,20 @@ export default function IRBFormDraftPanel({ initialFiles }: IRBFormDraftPanelPro
             )}
           </div>
 
-          {/* 연구 설명 입력 */}
+          {/* ② 연구 설명 */}
           <div>
-            <p className="text-xs text-slate-300 font-medium mb-1.5">② 연구 내용 설명</p>
+            <p className="text-xs text-slate-300 font-medium mb-2">
+              ② 연구 내용 설명
+              {description && (
+                <span className="ml-2 text-emerald-400 font-normal text-[11px]">
+                  ✓ 워크스페이스에서 입력한 내용이 자동으로 불러와졌습니다
+                </span>
+              )}
+            </p>
             <textarea
               value={description}
               onChange={(e) => setDescription(e.target.value)}
-              placeholder="연구 목적, 방법, 대상, 절차 등을 자유롭게 설명해주세요.&#10;예) 본 연구는 한양대학교 의생명공학과 석사과정 김철수가 진행하는 False Memory 실험입니다. 40명의 대학생을 대상으로 Stroop Task를 수행하며, 1시간 내외 소요됩니다..."
+              placeholder="연구 목적, 방법, 대상자, 절차 등을 설명해주세요.&#10;예) 한양대 의생명공학과 석사과정 김철수입니다. False Memory 연구를 위해 40명 대학생을 대상으로 Stroop Task 실험을 진행합니다. 약 1시간 소요됩니다."
               rows={4}
               className="glass-input w-full px-3 py-2.5 rounded-lg text-sm text-white placeholder-slate-500 outline-none resize-y"
             />
@@ -190,30 +199,33 @@ export default function IRBFormDraftPanel({ initialFiles }: IRBFormDraftPanelPro
 
       {/* ── 진행 중 ── */}
       {isRunning && (
-        <div className="space-y-2">
+        <div className="space-y-3">
           <div className="flex items-center gap-2 text-sm text-blue-400">
             <Loader2 size={15} className="animate-spin" />
-            {phase.status === 'extracting'
-              ? '파일에서 문항을 분석하는 중...'
-              : 'AI가 각 문항의 답변을 작성하는 중...'}
+            {phase.status === 'extracting' ? '파일에서 문항 분석 중...' : 'AI가 각 문항 답변 작성 중...'}
           </div>
-          <div className="w-full h-1 rounded-full bg-white/10 overflow-hidden">
+          <div className="w-full h-1.5 rounded-full bg-white/10 overflow-hidden">
             <div
-              className="h-full bg-blue-500 rounded-full animate-pulse"
-              style={{ width: phase.status === 'extracting' ? '40%' : '80%' }}
+              className="h-full bg-blue-500 rounded-full transition-all duration-500"
+              style={{ width: phase.status === 'extracting' ? '35%' : '75%' }}
             />
           </div>
+          <p className="text-xs text-slate-500">
+            {phase.status === 'extracting'
+              ? '파일 내 문항 구조를 파악하고 있습니다...'
+              : '연구 설명을 바탕으로 문항별 답변을 생성하고 있습니다...'}
+          </p>
         </div>
       )}
 
       {/* ── 완료: 결과 출력 ── */}
       {phase.status === 'done' && (
         <div className="space-y-4">
-          {/* 상단 액션 바 */}
+          {/* 액션 바 */}
           <div className="flex items-center justify-between">
             <p className="flex items-center gap-1.5 text-xs text-emerald-400">
               <CheckCircle2 size={13} />
-              {phase.output.sections.length}개 파일 · 초안 생성 완료
+              {phase.output.sections.length}개 파일 초안 생성 완료 — 각 답변을 복사해서 HWP에 붙여넣으세요
             </p>
             <div className="flex items-center gap-2">
               <button
@@ -242,7 +254,7 @@ export default function IRBFormDraftPanel({ initialFiles }: IRBFormDraftPanelPro
                 style={{ background: 'rgba(37,99,235,0.18)' }}
               >
                 <span className="text-sm font-semibold text-blue-200 truncate">
-                  📄 {sec.fileName}
+                  {sec.fileName}
                 </span>
                 <span className="flex items-center gap-2 shrink-0 ml-2">
                   <span className="text-xs text-slate-400">{sec.items.length}개 문항</span>
@@ -252,7 +264,7 @@ export default function IRBFormDraftPanel({ initialFiles }: IRBFormDraftPanelPro
                 </span>
               </button>
 
-              {/* 문항 목록 */}
+              {/* 문항·답변 목록 */}
               {openSections[sec.fileName] && (
                 <div className="divide-y" style={{ borderColor: 'rgba(255,255,255,0.06)' }}>
                   {sec.items.map((item, idx) => {
@@ -260,7 +272,7 @@ export default function IRBFormDraftPanel({ initialFiles }: IRBFormDraftPanelPro
                     return (
                       <div key={idx} className="px-4 py-4 space-y-2">
                         {/* 문항 */}
-                        <p className="text-xs font-semibold text-slate-400 uppercase tracking-wide">
+                        <p className="text-[11px] font-semibold text-slate-400 uppercase tracking-wide">
                           문항 {idx + 1}
                         </p>
                         <p className="text-sm text-slate-200">{item.question}</p>
@@ -276,8 +288,8 @@ export default function IRBFormDraftPanel({ initialFiles }: IRBFormDraftPanelPro
                           {item.answer && (
                             <button
                               onClick={() => handleCopy(item.answer, copyKey)}
-                              className="absolute top-2.5 right-2.5 opacity-0 group-hover:opacity-100 transition-opacity text-slate-500 hover:text-slate-200 p-1 rounded"
-                              title="복사"
+                              className="absolute top-2.5 right-2.5 opacity-0 group-hover:opacity-100 transition-opacity p-1 rounded text-slate-500 hover:text-slate-200"
+                              title="이 답변 복사"
                             >
                               {copiedKey === copyKey
                                 ? <Check size={13} className="text-emerald-400" />

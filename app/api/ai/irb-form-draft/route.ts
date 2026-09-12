@@ -129,43 +129,32 @@ ${fileBlocks}
 // ── Step 2 프롬프트: 답변 → 파일별 초안 생성 ─────────────────
 function buildGenerationPrompt(
   fileSections: IRBFormDraftResult['fileSections'],
-  answers: Record<string, string>
+  researchDescription: string
 ): string {
-  const answerBlock = Object.entries(answers)
-    .map(([k, v]) => `${k}: ${v}`)
-    .join('\n')
-
   const sectionDescs = fileSections
     .map((f) => {
-      const items = f.items.map((i) => `  - [문항] ${i.question} (key: ${i.answerKey})`).join('\n')
-      return `파일명: ${f.fileName}\n${items}`
+      const items = f.items.map((i, idx) => `  ${idx + 1}. ${i.question}`).join('\n')
+      return `[파일: ${f.fileName}]\n${items}`
     })
     .join('\n\n')
 
-  return `당신은 IRB 서류 작성 전문가입니다. 아래 연구자 답변을 바탕으로 각 서류 파일의 문항별 초안 텍스트를 생성해주세요.
+  return `당신은 IRB 서류 작성 전문가입니다. 연구 설명을 바탕으로 각 서류 파일의 문항별 답변을 작성하세요.
 
-=== 연구자 답변 ===
-${answerBlock}
+=== 연구 설명 ===
+${researchDescription}
 
-=== 파일별 문항 목록 ===
+=== 파일별 문항 ===
 ${sectionDescs}
 
-출력 규칙 (반드시 준수):
-- 파일 수(${fileSections.length}개)만큼 섹션을 반복하세요
-- 인사말, 부가 설명, 마크다운 없이 아래 형식만 사용하세요
-- 각 [답변]은 IRB 서류에 바로 붙여넣을 수 있는 전문적 한국어 문장으로 작성하세요
-- 답변 키에 해당하는 사용자 입력이 있으면 그 내용을 바탕으로, 없으면 일반적인 IRB 문구를 생성하세요
+규칙:
+- 인사말·설명 없이 아래 형식만 출력
+- 각 [답변]은 IRB 서류에 바로 붙여넣을 수 있는 전문 한국어 문장
+- 연구 설명에 없는 정보는 일반적인 IRB 문구로 채울 것
 
-출력 형식:
-[파일: 파일명1]
-[문항] 문항내용1
-[답변] 생성된 텍스트1
-[문항] 문항내용2
-[답변] 생성된 텍스트2
-
-[파일: 파일명2]
-[문항] 문항내용1
-[답변] 생성된 텍스트1`
+출력 형식 (파일 수만큼 반복):
+[파일: 파일명]
+[문항] 문항내용
+[답변] 생성된 답변`
 }
 
 // ── 결과 텍스트 파싱 ──────────────────────────────────────────
@@ -278,23 +267,22 @@ export async function POST(req: NextRequest) {
 
   // ── Phase 2: 답변 → 초안 생성 ─────────────────────────────
   if (contentType.includes('application/json')) {
-    let body: { fileSections: IRBFormDraftResult['fileSections']; answers: Record<string, string> }
+    let body: { fileSections: IRBFormDraftResult['fileSections']; researchDescription: string }
     try { body = await req.json() }
     catch { return NextResponse.json({ error: 'BadRequest' }, { status: 400 }) }
 
-    const { fileSections, answers } = body
-    if (!fileSections?.length || !answers)
-      return NextResponse.json({ error: 'BadRequest', message: 'fileSections와 answers가 필요합니다.' }, { status: 400 })
+    const { fileSections, researchDescription } = body
+    if (!fileSections?.length || !researchDescription?.trim())
+      return NextResponse.json({ error: 'BadRequest', message: 'fileSections와 researchDescription이 필요합니다.' }, { status: 400 })
 
     try {
       const raw = await generateText({
-        messages: [{ role: 'user', content: buildGenerationPrompt(fileSections, answers) }],
-        maxTokens: 4000,
+        messages: [{ role: 'user', content: buildGenerationPrompt(fileSections, researchDescription) }],
+        maxTokens: 3000,
       })
 
       const sections = parseOutput(raw)
 
-      // rawText: 복사용 전체 텍스트
       const rawText = sections
         .map((s) => {
           const items = s.items.map((i) => `[문항] ${i.question}\n[답변] ${i.answer}`).join('\n\n')

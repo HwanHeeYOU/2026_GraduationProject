@@ -26,6 +26,9 @@ export default function BulkGeneratePanel({ modules, projectId, onGenerated }: B
   const handleBulkGenerate = async () => {
     if (!description.trim() || isGenerating) return
 
+    // 연구 설명을 sessionStorage에 저장 → 검토 페이지에서 재사용
+    try { sessionStorage.setItem('irb_research_description', description) } catch {}
+
     setIsGenerating(true)
     setDone(false)
     setFailedModules([])
