@@ -99,14 +99,13 @@ export default function ReviewClient({
           </button>
         </div>
 
-        {/* IRB 서류 자동 초안 탭 */}
-        {activeTab === 'draft' && (
+        {/* IRB 서류 자동 초안 탭 — 숨김 처리로 state 유지 */}
+        <div className={activeTab === 'draft' ? '' : 'hidden'}>
           <IRBFormDraftPanel />
-        )}
+        </div>
 
-        {/* 모듈별 검토 탭 */}
-        {activeTab === 'modules' && (
-          <>
+        {/* 모듈별 검토 탭 — 숨김 처리로 state 유지 */}
+        <div className={activeTab === 'modules' ? '' : 'hidden'}>
             {hasIncomplete && (
               <div className="mb-4 px-4 py-3 rounded-xl border border-yellow-500/40 bg-yellow-500/10 text-yellow-300 text-sm">
                 미완성 항목이 있습니다. 모든 항목을 작성한 후 내보내기를 권장합니다.
@@ -144,8 +143,7 @@ export default function ReviewClient({
                 )
               })}
             </div>
-          </>
-        )}
+          </div>
       </div>
     </DashboardLayout>
   )
