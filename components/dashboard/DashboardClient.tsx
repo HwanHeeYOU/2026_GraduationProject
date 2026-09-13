@@ -5,7 +5,7 @@ import { useRouter } from 'next/navigation'
 import { Plus } from 'lucide-react'
 import ProjectCard from './ProjectCard'
 
-type ProjectStatus = 'DRAFT' | 'IN_PROGRESS' | 'COMPLETED'
+type ProjectStatus = 'DRAFT' | 'IN_PROGRESS' | 'COMPLETED' | 'REJECTED'
 
 interface Project {
   id: string

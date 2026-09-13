@@ -23,12 +23,21 @@ export default async function WorkspacePage({ params }: WorkspacePageProps) {
         include: { module: true },
         orderBy: { order: 'asc' },
       },
+      rejectionNotes: { orderBy: { createdAt: 'desc' } },
     },
   })
 
   if (!project) {
     notFound()
   }
+
+  const rejectionNotes = project.rejectionNotes.map((n) => ({
+    id: n.id,
+    projectModuleId: n.projectModuleId,
+    reason: n.reason,
+    resolved: n.resolved,
+    createdAt: n.createdAt.toISOString(),
+  }))
 
   const modules = project.modules.map((pm) => ({
     id: pm.id,
@@ -52,6 +61,7 @@ export default async function WorkspacePage({ params }: WorkspacePageProps) {
       projectName={project.name}
       institutionName={project.institution.name}
       modules={modules}
+      rejectionNotes={rejectionNotes}
       userName={session.user.name ?? session.user.email}
     />
   )

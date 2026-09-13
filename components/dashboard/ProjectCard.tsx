@@ -5,7 +5,7 @@ import { useState, useRef } from 'react'
 import { Calendar, Building2, Pencil } from 'lucide-react'
 import DeleteProjectDialog from './DeleteProjectDialog'
 
-type ProjectStatus = 'DRAFT' | 'IN_PROGRESS' | 'COMPLETED'
+type ProjectStatus = 'DRAFT' | 'IN_PROGRESS' | 'COMPLETED' | 'REJECTED'
 
 interface Project {
   id: string
@@ -37,6 +37,10 @@ const statusConfig: Record<ProjectStatus, { label: string; className: string }> 
   COMPLETED: {
     label: '완료',
     className: 'bg-green-500/20 border-green-500/40 text-green-400',
+  },
+  REJECTED: {
+    label: '반려됨',
+    className: 'bg-red-500/20 border-red-500/40 text-red-400',
   },
 }
 

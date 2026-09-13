@@ -6,6 +6,7 @@ import DashboardLayout from '@/components/dashboard/DashboardLayout'
 import ModuleCard, { type ProjectModuleWithMeta } from './ModuleCard'
 import BulkGeneratePanel from './BulkGeneratePanel'
 import NetworkSyncProvider from './NetworkSyncProvider'
+import RejectionPanel, { type RejectionNote } from './RejectionPanel'
 
 const SESSION_KEY = 'irb_research_description'
 
@@ -14,6 +15,7 @@ interface WorkspaceClientProps {
   projectName: string
   institutionName: string
   modules: ProjectModuleWithMeta[]
+  rejectionNotes: RejectionNote[]
   userName?: string | null
 }
 
@@ -22,9 +24,11 @@ export default function WorkspaceClient({
   projectName,
   institutionName,
   modules,
+  rejectionNotes: initialRejectionNotes,
   userName,
 }: WorkspaceClientProps) {
   const [bulkContents, setBulkContents] = useState<Record<string, string>>({})
+  const [rejectionNotes, setRejectionNotes] = useState<RejectionNote[]>(initialRejectionNotes)
   const [navigating, setNavigating] = useState(false)
   const [navStep, setNavStep] = useState<'idle' | 'saving' | 'summarizing'>('idle')
 
@@ -44,6 +48,13 @@ export default function WorkspaceClient({
 
   const handleBulkGenerated = (moduleId: string, content: string) => {
     setBulkContents((prev) => ({ ...prev, [moduleId]: content }))
+  }
+
+  const unresolvedNoteByModule = new Map<string, RejectionNote>()
+  for (const note of rejectionNotes) {
+    if (!note.resolved && note.projectModuleId && !unresolvedNoteByModule.has(note.projectModuleId)) {
+      unresolvedNoteByModule.set(note.projectModuleId, note)
+    }
   }
 
   const handleReviewClick = async () => {
@@ -114,6 +125,14 @@ export default function WorkspaceClient({
             </button>
           </div>
 
+          {/* IRB 반려 사유 관리 */}
+          <RejectionPanel
+            projectId={projectId}
+            moduleOptions={modules.map((m) => ({ id: m.id, name: m.module.name }))}
+            notes={rejectionNotes}
+            onNotesChange={setRejectionNotes}
+          />
+
           {/* 실험 설명으로 전체 모듈 일괄 생성 */}
           {modules.length > 0 && (
             <BulkGeneratePanel
@@ -136,6 +155,7 @@ export default function WorkspaceClient({
                   module={mod}
                   projectId={projectId}
                   externalContent={bulkContents[mod.id]}
+                  rejectionNote={unresolvedNoteByModule.get(mod.id)}
                   onRegisterFlush={registerFlush}
                   onRegisterGetContent={registerGetContent}
                 />

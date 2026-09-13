@@ -22,7 +22,7 @@ export default async function DashboardPage() {
 
   const projects = rawProjects.map((p) => ({
     ...p,
-    status: p.status as 'DRAFT' | 'IN_PROGRESS' | 'COMPLETED',
+    status: p.status as 'DRAFT' | 'IN_PROGRESS' | 'COMPLETED' | 'REJECTED',
     updatedAt: p.updatedAt.toISOString(),
   }))
 

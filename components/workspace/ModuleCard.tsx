@@ -1,10 +1,13 @@
 'use client'
 
 import { useState, useEffect, useCallback } from 'react'
+import { AlertTriangle } from 'lucide-react'
 import { useAutoSave } from '@/hooks/useAutoSave'
 import SaveStatusIndicator from './SaveStatusIndicator'
 import FormulaRenderer from './FormulaRenderer'
 import AIGenerateButton from './AIGenerateButton'
+import ReviseFromRejectionButton from './ReviseFromRejectionButton'
+import type { RejectionNote } from './RejectionPanel'
 
 export interface ProjectModuleWithMeta {
   id: string
@@ -26,11 +29,12 @@ interface ModuleCardProps {
   module: ProjectModuleWithMeta
   projectId: string
   externalContent?: string
+  rejectionNote?: RejectionNote
   onRegisterFlush?: (moduleId: string, fn: () => Promise<void>) => () => void
   onRegisterGetContent?: (moduleId: string, fn: () => string) => () => void
 }
 
-export default function ModuleCard({ module, projectId, externalContent, onRegisterFlush, onRegisterGetContent }: ModuleCardProps) {
+export default function ModuleCard({ module, projectId, externalContent, rejectionNote, onRegisterFlush, onRegisterGetContent }: ModuleCardProps) {
   const { content, setContent, saveStatus, flushSave } = useAutoSave(projectId, module.id, module.content)
   const [keywords, setKeywords] = useState('')
 
@@ -56,8 +60,34 @@ export default function ModuleCard({ module, projectId, externalContent, onRegis
     setContent(generated)
   }, [setContent])
 
+  const handleRevised = useCallback((revised: string) => {
+    setContent(revised)
+  }, [setContent])
+
   return (
-    <div className="glass-card p-5 flex flex-col gap-4">
+    <div className={`glass-card p-5 flex flex-col gap-4 ${rejectionNote ? 'border-red-500/50 bg-red-500/5' : ''}`}>
+      {/* 반려 사유 배너 */}
+      {rejectionNote && (
+        <div className="flex flex-col gap-3 p-3 rounded-lg border border-red-500/40 bg-red-500/10">
+          <div className="flex items-start gap-2">
+            <AlertTriangle size={14} className="text-red-400 shrink-0 mt-0.5" />
+            <div className="min-w-0">
+              <p className="text-xs font-semibold text-red-300 mb-0.5">IRB 반려 사유</p>
+              <p className="text-sm text-red-200">{rejectionNote.reason}</p>
+            </div>
+          </div>
+          <ReviseFromRejectionButton
+            projectId={projectId}
+            projectModuleId={module.id}
+            currentContent={content}
+            rejectionReason={rejectionNote.reason}
+            moduleName={module.module.name}
+            moduleDescription={module.module.description}
+            moduleCategory={module.module.category}
+            onRevised={handleRevised}
+          />
+        </div>
+      )}
       {/* 카드 헤더 */}
       <div className="flex items-start justify-between gap-3">
         <div className="flex-1 min-w-0">

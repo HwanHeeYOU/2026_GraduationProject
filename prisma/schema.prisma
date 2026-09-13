@@ -64,6 +64,7 @@ model Project {
   createdAt     DateTime        @default(now())
   updatedAt     DateTime        @updatedAt
   modules       ProjectModule[]
+  rejectionNotes RejectionNote[]
 }
 
 model ProjectModule {
@@ -75,7 +76,20 @@ model ProjectModule {
   content   String    @default("")
   order     Int
   updatedAt DateTime  @updatedAt
+  rejectionNotes RejectionNote[]
 
   @@unique([projectId, moduleId])
+}
+
+model RejectionNote {
+  id            String         @id @default(cuid())
+  project       Project        @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  projectId     String
+  projectModule ProjectModule? @relation(fields: [projectModuleId], references: [id], onDelete: Cascade)
+  projectModuleId String?
+  reason        String
+  resolved      Boolean        @default(false)
+  createdAt     DateTime       @default(now())
+  resolvedAt    DateTime?
 }
 
