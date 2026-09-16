@@ -3,6 +3,7 @@ import { redirect, notFound } from 'next/navigation'
 import { authOptions } from '@/lib/auth'
 import { prisma } from '@/lib/prisma'
 import ReviewClient from '@/components/review/ReviewClient'
+import type { IRBFormDraftResult } from '@/lib/irb/types'
 
 interface ReviewPageProps {
   params: { id: string }
@@ -40,12 +41,22 @@ export default async function ReviewPage({ params }: ReviewPageProps) {
     },
   }))
 
+  let initialFormDraft: IRBFormDraftResult | null = null
+  if (project.formDraftJson) {
+    try {
+      initialFormDraft = JSON.parse(project.formDraftJson) as IRBFormDraftResult
+    } catch {
+      initialFormDraft = null
+    }
+  }
+
   return (
     <ReviewClient
       projectId={project.id}
       projectName={project.name}
       institutionName={project.institution.name}
       modules={modules}
+      initialFormDraft={initialFormDraft}
       userName={session.user.name ?? session.user.email}
     />
   )

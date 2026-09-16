@@ -2,7 +2,7 @@
 
 import { useState, useRef, useEffect } from 'react'
 import { Upload, FileText, X, Loader2, CheckCircle2, AlertCircle, Copy, Check, ChevronDown, ChevronUp } from 'lucide-react'
-import type { IRBFormDraftOutput } from '@/lib/irb/types'
+import type { IRBFormDraftOutput, IRBFormDraftResult } from '@/lib/irb/types'
 
 type Phase =
   | { status: 'idle' }
@@ -15,7 +15,13 @@ const ACCEPTED = '.pdf,.docx,.txt,.hwp,.hwpx'
 const MAX_MB = 10
 const SESSION_KEY = 'irb_research_description'
 
-export default function IRBFormDraftPanel() {
+interface IRBFormDraftPanelProps {
+  initialFormDraft?: IRBFormDraftResult
+}
+
+export default function IRBFormDraftPanel({ initialFormDraft }: IRBFormDraftPanelProps) {
+  const hasStoredForm = !!initialFormDraft && initialFormDraft.fileSections.length > 0
+  const [useStoredForm, setUseStoredForm] = useState(hasStoredForm)
   const [files, setFiles] = useState<File[]>([])
   const [description, setDescription] = useState('')
   const [phase, setPhase] = useState<Phase>({ status: 'idle' })
@@ -48,29 +54,41 @@ export default function IRBFormDraftPanel() {
 
   // ── 메인: 파일 분석 → AI 초안 생성 ──────────────────────
   const handleGenerate = async () => {
-    if (files.length === 0 || !description.trim()) return
-
-    // Step 1: 파일 → 문항 추출
-    setPhase({ status: 'extracting' })
-    const formData = new FormData()
-    files.forEach((f) => formData.append('file', f))
+    if (useStoredForm) {
+      if (!initialFormDraft || initialFormDraft.fileSections.length === 0 || !description.trim()) return
+    } else if (files.length === 0 || !description.trim()) {
+      return
+    }
 
     try {
-      const res1 = await fetch('/api/ai/irb-form-draft', { method: 'POST', body: formData })
-      if (!res1.ok) {
-        const d = await res1.json().catch(() => ({}))
-        setPhase({ status: 'error', message: (d as {message?:string}).message ?? '문항 추출에 실패했습니다.' })
-        return
+      let fileSections: import('@/lib/irb/types').IRBFormDraftResult['fileSections']
+
+      if (useStoredForm && initialFormDraft) {
+        // 프로젝트 생성 시 업로드한 원본 서식에서 이미 추출해 둔 문항을 그대로 사용
+        fileSections = initialFormDraft.fileSections
+      } else {
+        // Step 1: 파일 → 문항 추출
+        setPhase({ status: 'extracting' })
+        const formData = new FormData()
+        files.forEach((f) => formData.append('file', f))
+
+        const res1 = await fetch('/api/ai/irb-form-draft', { method: 'POST', body: formData })
+        if (!res1.ok) {
+          const d = await res1.json().catch(() => ({}))
+          setPhase({ status: 'error', message: (d as {message?:string}).message ?? '문항 추출에 실패했습니다.' })
+          return
+        }
+        const extracted = await res1.json() as import('@/lib/irb/types').IRBFormDraftResult
+        fileSections = extracted.fileSections
       }
-      const extracted = await res1.json() as import('@/lib/irb/types').IRBFormDraftResult
 
       // Step 2: 연구 설명 → 파일별 초안 생성
-      setPhase({ status: 'generating', completed: 0, total: extracted.fileSections.length })
+      setPhase({ status: 'generating', completed: 0, total: fileSections.length })
       const res2 = await fetch('/api/ai/irb-form-draft', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          fileSections: extracted.fileSections,
+          fileSections,
           researchDescription: description,
         }),
       })
@@ -140,46 +158,83 @@ export default function IRBFormDraftPanel() {
       {(phase.status === 'idle' || phase.status === 'error') && (
         <div className="space-y-4">
 
-          {/* ① 파일 업로드 */}
+          {/* ① 원본 서식 파일 */}
           <div>
             <p className="text-xs text-slate-300 font-medium mb-2">
-              ① IRB 빈 양식 파일 업로드
-              <span className="ml-1 text-slate-500 font-normal">(처음 단계에서 올린 파일을 다시 업로드하세요)</span>
+              ① IRB 원본 서식 파일
             </p>
-            <div
-              className="border border-dashed border-white/20 rounded-xl p-4 text-center cursor-pointer hover:border-blue-400/50 hover:bg-white/[0.03] transition-colors"
-              onClick={() => inputRef.current?.click()}
-              onDrop={(e) => { e.preventDefault(); addFiles(e.dataTransfer.files) }}
-              onDragOver={(e) => e.preventDefault()}
-            >
-              <Upload size={16} className="mx-auto mb-1 text-slate-500" />
-              <p className="text-sm text-slate-300">파일 드래그 또는 클릭</p>
-              <p className="text-xs text-slate-500 mt-0.5">PDF · DOCX · TXT · HWP · HWPX</p>
-              <input
-                ref={inputRef}
-                type="file"
-                accept={ACCEPTED}
-                multiple
-                className="hidden"
-                onChange={(e) => addFiles(e.target.files)}
-                onClick={(e) => { (e.target as HTMLInputElement).value = '' }}
-              />
-            </div>
 
-            {files.length > 0 && (
-              <ul className="mt-2 space-y-1.5">
-                {files.map((f) => (
-                  <li key={f.name} className="flex items-center gap-2 px-3 py-2 rounded-lg bg-white/5 border border-white/10">
-                    <FileText size={13} className="shrink-0 text-slate-400" />
-                    <span className="flex-1 text-sm text-white truncate">{f.name}</span>
-                    <span className="text-xs text-slate-500 shrink-0">{(f.size/1024/1024).toFixed(1)}MB</span>
-                    <button type="button" onClick={() => removeFile(f.name)}
-                      className="shrink-0 text-slate-500 hover:text-slate-300">
-                      <X size={13} />
-                    </button>
-                  </li>
-                ))}
-              </ul>
+            {useStoredForm && initialFormDraft ? (
+              <div className="p-3 rounded-xl border border-emerald-500/30 bg-emerald-500/5 space-y-2">
+                <p className="flex items-center gap-1.5 text-xs text-emerald-400 font-medium">
+                  <CheckCircle2 size={13} />
+                  프로젝트 생성 시 업로드한 원본 서식을 기억해 두었습니다 — 다시 올릴 필요 없습니다
+                </p>
+                <ul className="space-y-1">
+                  {initialFormDraft.fileSections.map((s) => (
+                    <li key={s.fileName} className="flex items-center gap-2 text-xs text-slate-300">
+                      <FileText size={12} className="shrink-0 text-slate-500" />
+                      <span className="flex-1 truncate">{s.fileName}</span>
+                      <span className="text-slate-500 shrink-0">{s.items.length}개 문항</span>
+                    </li>
+                  ))}
+                </ul>
+                <button
+                  type="button"
+                  onClick={() => setUseStoredForm(false)}
+                  className="text-xs text-slate-400 hover:text-slate-200 underline"
+                >
+                  다른 파일로 다시 하기
+                </button>
+              </div>
+            ) : (
+              <>
+                <div
+                  className="border border-dashed border-white/20 rounded-xl p-4 text-center cursor-pointer hover:border-blue-400/50 hover:bg-white/[0.03] transition-colors"
+                  onClick={() => inputRef.current?.click()}
+                  onDrop={(e) => { e.preventDefault(); addFiles(e.dataTransfer.files) }}
+                  onDragOver={(e) => e.preventDefault()}
+                >
+                  <Upload size={16} className="mx-auto mb-1 text-slate-500" />
+                  <p className="text-sm text-slate-300">파일 드래그 또는 클릭</p>
+                  <p className="text-xs text-slate-500 mt-0.5">PDF · DOCX · TXT · HWP · HWPX</p>
+                  <input
+                    ref={inputRef}
+                    type="file"
+                    accept={ACCEPTED}
+                    multiple
+                    className="hidden"
+                    onChange={(e) => addFiles(e.target.files)}
+                    onClick={(e) => { (e.target as HTMLInputElement).value = '' }}
+                  />
+                </div>
+
+                {files.length > 0 && (
+                  <ul className="mt-2 space-y-1.5">
+                    {files.map((f) => (
+                      <li key={f.name} className="flex items-center gap-2 px-3 py-2 rounded-lg bg-white/5 border border-white/10">
+                        <FileText size={13} className="shrink-0 text-slate-400" />
+                        <span className="flex-1 text-sm text-white truncate">{f.name}</span>
+                        <span className="text-xs text-slate-500 shrink-0">{(f.size/1024/1024).toFixed(1)}MB</span>
+                        <button type="button" onClick={() => removeFile(f.name)}
+                          className="shrink-0 text-slate-500 hover:text-slate-300">
+                          <X size={13} />
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+
+                {hasStoredForm && (
+                  <button
+                    type="button"
+                    onClick={() => setUseStoredForm(true)}
+                    className="mt-2 text-xs text-slate-400 hover:text-slate-200 underline"
+                  >
+                    처음 업로드한 서식 다시 사용하기
+                  </button>
+                )}
+              </>
             )}
           </div>
 
@@ -211,7 +266,10 @@ export default function IRBFormDraftPanel() {
 
           <button
             onClick={handleGenerate}
-            disabled={files.length === 0 || !description.trim()}
+            disabled={
+              (useStoredForm ? !initialFormDraft || initialFormDraft.fileSections.length === 0 : files.length === 0) ||
+              !description.trim()
+            }
             className="cta-primary px-4 py-2 rounded-lg text-sm text-white font-medium disabled:opacity-40 disabled:cursor-not-allowed"
           >
             초안 생성 시작

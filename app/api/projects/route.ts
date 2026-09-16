@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { getServerSession } from 'next-auth'
 import { authOptions } from '@/lib/auth'
 import { prisma } from '@/lib/prisma'
+import type { IRBFormDraftResult } from '@/lib/irb/types'
 
 export async function GET() {
   const session = await getServerSession(authOptions)
@@ -28,14 +29,20 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'Unauthorized', message: '인증이 필요합니다.' }, { status: 401 })
   }
 
-  let body: { name?: string; institutionId?: string; selectedModuleIds?: string[] }
+  let body: {
+    name?: string
+    institutionId?: string
+    selectedModuleIds?: string[]
+    sourceSummary?: string
+    formDraft?: IRBFormDraftResult
+  }
   try {
     body = await req.json()
   } catch {
     return NextResponse.json({ error: 'BadRequest', message: '요청 형식이 올바르지 않습니다.' }, { status: 400 })
   }
 
-  const { name, institutionId, selectedModuleIds } = body
+  const { name, institutionId, selectedModuleIds, sourceSummary, formDraft } = body
 
   if (!name || !institutionId || !Array.isArray(selectedModuleIds) || selectedModuleIds.length === 0) {
     return NextResponse.json(
@@ -58,6 +65,9 @@ export async function POST(req: NextRequest) {
           userId: session.user.id,
           institutionId,
           status: 'DRAFT',
+          sourceSummary: sourceSummary?.trim() || null,
+          formDraftJson:
+            formDraft && formDraft.fileSections?.length > 0 ? JSON.stringify(formDraft) : null,
         },
       })
 

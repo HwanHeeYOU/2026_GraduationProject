@@ -62,6 +62,7 @@ export default async function WorkspacePage({ params }: WorkspacePageProps) {
       institutionName={project.institution.name}
       modules={modules}
       rejectionNotes={rejectionNotes}
+      sourceSummary={project.sourceSummary}
       userName={session.user.name ?? session.user.email}
     />
   )

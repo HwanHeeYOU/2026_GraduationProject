@@ -1,12 +1,13 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { Loader2, CheckCircle2, AlertCircle } from 'lucide-react'
 import type { ProjectModuleWithMeta } from './ModuleCard'
 
 interface BulkGeneratePanelProps {
   modules: ProjectModuleWithMeta[]
   projectId: string
+  initialDescription?: string
   onGenerated: (moduleId: string, content: string) => void
 }
 
@@ -16,12 +17,18 @@ interface Progress {
   currentName: string
 }
 
-export default function BulkGeneratePanel({ modules, projectId, onGenerated }: BulkGeneratePanelProps) {
-  const [description, setDescription] = useState('')
+export default function BulkGeneratePanel({ modules, projectId, initialDescription, onGenerated }: BulkGeneratePanelProps) {
+  const [description, setDescription] = useState(initialDescription ?? '')
   const [isGenerating, setIsGenerating] = useState(false)
   const [progress, setProgress] = useState<Progress | null>(null)
   const [failedModules, setFailedModules] = useState<string[]>([])
   const [done, setDone] = useState(false)
+
+  // 프로젝트 생성 시 첨부한 파일에서 요약된 연구 설명을 검토 단계에서도 재사용할 수 있도록 저장
+  useEffect(() => {
+    if (!initialDescription) return
+    try { sessionStorage.setItem('irb_research_description', initialDescription) } catch {}
+  }, [initialDescription])
 
   const handleBulkGenerate = async () => {
     if (!description.trim() || isGenerating) return
@@ -81,6 +88,11 @@ export default function BulkGeneratePanel({ modules, projectId, onGenerated }: B
 
       <p className="text-xs text-slate-400">
         연구 실험을 설명하면 선택된 모든 모듈의 초안을 자동으로 작성해드립니다.
+        {initialDescription && (
+          <span className="ml-1.5 text-emerald-400">
+            ✓ 프로젝트 생성 시 첨부한 파일 내용을 AI가 요약해 자동으로 채웠습니다 — 필요하면 수정하세요
+          </span>
+        )}
       </p>
 
       <textarea

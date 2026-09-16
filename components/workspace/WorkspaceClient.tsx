@@ -16,6 +16,7 @@ interface WorkspaceClientProps {
   institutionName: string
   modules: ProjectModuleWithMeta[]
   rejectionNotes: RejectionNote[]
+  sourceSummary?: string | null
   userName?: string | null
 }
 
@@ -25,6 +26,7 @@ export default function WorkspaceClient({
   institutionName,
   modules,
   rejectionNotes: initialRejectionNotes,
+  sourceSummary,
   userName,
 }: WorkspaceClientProps) {
   const [bulkContents, setBulkContents] = useState<Record<string, string>>({})
@@ -138,6 +140,7 @@ export default function WorkspaceClient({
             <BulkGeneratePanel
               modules={modules}
               projectId={projectId}
+              initialDescription={sourceSummary ?? ''}
               onGenerated={handleBulkGenerated}
             />
           )}

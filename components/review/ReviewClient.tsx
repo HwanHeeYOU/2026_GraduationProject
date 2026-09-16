@@ -6,6 +6,7 @@ import { ArrowLeft, FileOutput } from 'lucide-react'
 import DashboardLayout from '@/components/dashboard/DashboardLayout'
 import ExportButton from './ExportButton'
 import IRBFormDraftPanel from '@/components/workspace/IRBFormDraftPanel'
+import type { IRBFormDraftResult } from '@/lib/irb/types'
 
 interface ReviewModule {
   id: string
@@ -22,6 +23,7 @@ interface ReviewClientProps {
   projectName: string
   institutionName: string
   modules: ReviewModule[]
+  initialFormDraft?: IRBFormDraftResult | null
   userName?: string | null
 }
 
@@ -30,6 +32,7 @@ export default function ReviewClient({
   projectName,
   institutionName,
   modules,
+  initialFormDraft,
   userName,
 }: ReviewClientProps) {
   const [contents, setContents] = useState<Record<string, string>>(
@@ -101,7 +104,7 @@ export default function ReviewClient({
 
         {/* IRB 서류 자동 초안 탭 — 숨김 처리로 state 유지 */}
         <div className={activeTab === 'draft' ? '' : 'hidden'}>
-          <IRBFormDraftPanel />
+          <IRBFormDraftPanel initialFormDraft={initialFormDraft ?? undefined} />
         </div>
 
         {/* 모듈별 검토 탭 — 숨김 처리로 state 유지 */}

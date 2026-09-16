@@ -135,34 +135,38 @@ function buildInstruction(moduleList: string): string {
   return `=== 사용 가능한 IRB 모듈 목록 ===
 ${moduleList}
 
-다음 JSON 배열 형식으로만 응답해주세요. 다른 텍스트나 마크다운은 절대 포함하지 마세요:
-[
-  {
-    "type": "matched",
-    "moduleId": "module-01",
-    "status": "required",
-    "reason": "업로드한 양식에서 '연구 목적' 항목이 명시적으로 요구됩니다.",
-    "matchedSection": "양식 1항: 연구 목적 및 필요성"
-  },
-  {
-    "type": "new",
-    "suggestedName": "유전자 정보 활용 동의",
-    "suggestedCategory": "동의서",
-    "suggestedDescription": "유전자 정보를 수집·활용하는 연구에서 별도로 받아야 하는 동의 항목",
-    "status": "required",
-    "reason": "위 목록의 어떤 모듈로도 표현되지 않는 항목을 이 양식이 명시적으로 요구합니다.",
-    "matchedSection": "양식 3항: 유전자 정보 활용 동의"
-  }
-]
+다음 JSON 객체 형식으로만 응답해주세요. 다른 텍스트나 마크다운은 절대 포함하지 마세요:
+{
+  "summary": "문서에 실제로 담긴 연구 목적, 연구 대상, 연구 방법·절차, 수집 데이터 등 핵심 내용을 3~5문장의 한국어로 요약",
+  "items": [
+    {
+      "type": "matched",
+      "moduleId": "module-01",
+      "status": "required",
+      "reason": "업로드한 양식에서 '연구 목적' 항목이 명시적으로 요구됩니다.",
+      "matchedSection": "양식 1항: 연구 목적 및 필요성"
+    },
+    {
+      "type": "new",
+      "suggestedName": "유전자 정보 활용 동의",
+      "suggestedCategory": "동의서",
+      "suggestedDescription": "유전자 정보를 수집·활용하는 연구에서 별도로 받아야 하는 동의 항목",
+      "status": "required",
+      "reason": "위 목록의 어떤 모듈로도 표현되지 않는 항목을 이 양식이 명시적으로 요구합니다.",
+      "matchedSection": "양식 3항: 유전자 정보 활용 동의"
+    }
+  ]
+}
 
 규칙:
-- "type": "matched"는 위 모듈 목록 중 하나와 대응될 때, "type": "new"는 목록의 어떤 항목으로도 표현되지 않는 새로운 요구사항을 발견했을 때 사용하세요
+- "summary"는 문서에 실제로 있는 내용만 근거로 작성하고, 문서에 없는 내용은 지어내지 마세요. 문서가 양식/가이드라인일 뿐 연구 내용이 담겨있지 않다면 빈 문자열로 두세요
+- "items"의 "type": "matched"는 위 모듈 목록 중 하나와 대응될 때, "type": "new"는 목록의 어떤 항목으로도 표현되지 않는 새로운 요구사항을 발견했을 때 사용하세요
 - "matched"인 경우 moduleId는 반드시 위 목록에 있는 ID만 사용하고 suggested* 필드는 생략하세요
 - "new"인 경우 moduleId는 생략하고 suggestedName/suggestedCategory/suggestedDescription을 채우세요
 - "required": 문서에서 해당 항목을 명시적으로 요구하는 경우
 - "recommended": 문서 내용으로 미루어 작성이 권장되는 경우
-- 관련 없는 항목은 포함하지 마세요
-- 유효한 JSON 배열만 반환하세요`
+- 관련 없는 항목은 "items"에 포함하지 마세요
+- 유효한 JSON 객체만 반환하세요`
 }
 
 interface RawAnalysisItem {
@@ -179,11 +183,13 @@ interface RawAnalysisItem {
 function parseAnalysisResult(raw: string): {
   matched: ModuleRecommendation[]
   newSuggestions: NewModuleSuggestion[]
+  summary: string
 } {
   // Handle both bare JSON and markdown code blocks
-  const match = raw.match(/```(?:json)?\s*(\[[\s\S]*?\])\s*```/) ?? raw.match(/(\[[\s\S]*\])/)
-  if (!match) throw new Error('No JSON array in response')
-  const items: RawAnalysisItem[] = JSON.parse(match[1] ?? match[0])
+  const match = raw.match(/```(?:json)?\s*(\{[\s\S]*?\})\s*```/) ?? raw.match(/(\{[\s\S]*\})/)
+  if (!match) throw new Error('No JSON object in response')
+  const parsed: { summary?: string; items?: RawAnalysisItem[] } = JSON.parse(match[1] ?? match[0])
+  const items: RawAnalysisItem[] = parsed.items ?? []
 
   const matched: ModuleRecommendation[] = []
   const newSuggestions: NewModuleSuggestion[] = []
@@ -209,7 +215,7 @@ function parseAnalysisResult(raw: string): {
     }
   }
 
-  return { matched, newSuggestions }
+  return { matched, newSuggestions, summary: parsed.summary?.trim() ?? '' }
 }
 
 export async function POST(req: NextRequest) {
@@ -335,7 +341,7 @@ export async function POST(req: NextRequest) {
         maxTokens: 2048,
       })
     }
-    const { matched, newSuggestions } = parseAnalysisResult(rawText)
+    const { matched, newSuggestions, summary } = parseAnalysisResult(rawText)
 
     // Filter out any invalid moduleIds that aren't in our list
     const validIds = new Set(moduleList.map((m) => m.id))
@@ -344,9 +350,10 @@ export async function POST(req: NextRequest) {
     console.log(
       '[analyze-irb-file] recommendations:', filtered.length,
       'newSuggestions:', newSuggestions.length,
+      'summaryLength:', summary.length,
       'for institution:', institutionId
     )
-    return NextResponse.json({ recommendations: filtered, newSuggestions })
+    return NextResponse.json({ recommendations: filtered, newSuggestions, summary })
   } catch (error) {
     console.error('[analyze-irb-file] error:', error)
     return NextResponse.json(
