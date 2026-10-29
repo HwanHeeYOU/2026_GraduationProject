@@ -14,8 +14,14 @@ async function extractDocxText(buffer: Buffer): Promise<string | null> {
   try {
     const mammoth = await import('mammoth')
     const result = await mammoth.extractRawText({ buffer })
-    return result.value?.trim() || null
-  } catch {
+    const text = result.value?.trim()
+    if (!text) {
+      console.warn('[extractDocxText] mammoth returned empty text')
+      return null
+    }
+    return text
+  } catch (e) {
+    console.error('[extractDocxText] failed:', e instanceof Error ? e.message : e)
     return null
   }
 }
@@ -53,8 +59,13 @@ async function extractHwpText(buffer: Buffer): Promise<string | null> {
     }
 
     const result = lines.join('\n').trim()
-    return result || null
-  } catch {
+    if (!result) {
+      console.warn('[extractHwpText] parsed but got empty text — HWP version may be unsupported')
+      return null
+    }
+    return result
+  } catch (e) {
+    console.error('[extractHwpText] failed:', e instanceof Error ? e.message : e)
     return null
   }
 }
@@ -64,7 +75,11 @@ async function extractHwpxText(buffer: Buffer): Promise<string | null> {
     const JSZip = (await import('jszip')).default
     const zip = await JSZip.loadAsync(buffer)
 
-    const sectionFiles = Object.keys(zip.files)
+    const allFiles = Object.keys(zip.files)
+    console.log('[extractHwpxText] zip entries:', allFiles.filter(n => n.endsWith('.xml')).slice(0, 10))
+
+    // 다양한 네임스페이스 패턴 지원 (hp:t, hh:t, w:t 등)
+    const sectionFiles = allFiles
       .filter((name) => /^Contents\/section\d+\.xml$/i.test(name))
       .sort((a, b) => {
         const na = Number(a.match(/(\d+)/)?.[1] ?? 0)
@@ -72,26 +87,53 @@ async function extractHwpxText(buffer: Buffer): Promise<string | null> {
         return na - nb
       })
 
-    if (sectionFiles.length === 0) return null
+    if (sectionFiles.length === 0) {
+      // Contents/Section 대신 다른 경로일 수 있음
+      const fallback = allFiles.filter((n) => n.toLowerCase().includes('section') && n.endsWith('.xml'))
+      console.warn('[extractHwpxText] no Contents/section*.xml found, fallback candidates:', fallback)
+      if (fallback.length === 0) return null
+      sectionFiles.push(...fallback)
+    }
 
     const texts: string[] = []
     for (const name of sectionFiles) {
       const xml = await zip.files[name].async('text')
-      const matches = Array.from(xml.matchAll(/<hp:t[^>]*>([\s\S]*?)<\/hp:t>/g))
-      for (const m of matches) {
-        const decoded = m[1]
-          .replace(/&lt;/g, '<')
-          .replace(/&gt;/g, '>')
-          .replace(/&quot;/g, '"')
-          .replace(/&apos;/g, "'")
-          .replace(/&amp;/g, '&')
-        if (decoded) texts.push(decoded)
+      // hp:t, hh:t, w:t 등 다양한 텍스트 태그 패턴 처리
+      const patterns = [
+        /<(?:hp|hh|w):t[^>]*>([\s\S]*?)<\/(?:hp|hh|w):t>/g,
+        /<t[^>]*>([\s\S]*?)<\/t>/g,
+      ]
+      let found = false
+      for (const pattern of patterns) {
+        const matches = Array.from(xml.matchAll(pattern))
+        if (matches.length > 0) {
+          for (const m of matches) {
+            const decoded = m[1]
+              .replace(/&lt;/g, '<')
+              .replace(/&gt;/g, '>')
+              .replace(/&quot;/g, '"')
+              .replace(/&apos;/g, "'")
+              .replace(/&amp;/g, '&')
+              .trim()
+            if (decoded) texts.push(decoded)
+          }
+          found = true
+          break
+        }
+      }
+      if (!found) {
+        console.warn('[extractHwpxText] no text tags found in', name, '— xml snippet:', xml.slice(0, 300))
       }
     }
 
     const result = texts.join('\n').trim()
-    return result || null
-  } catch {
+    if (!result) {
+      console.warn('[extractHwpxText] parsed but got empty text')
+      return null
+    }
+    return result
+  } catch (e) {
+    console.error('[extractHwpxText] failed:', e instanceof Error ? e.message : e)
     return null
   }
 }
@@ -297,7 +339,10 @@ export async function POST(req: NextRequest) {
         text = await extractHwpxText(entry.buffer)
       }
       if (text) {
+        console.log(`[analyze-irb-file] extracted ${text.length} chars from ${entry.name}`)
         extractedTexts.push(`=== 파일: ${entry.name} ===\n${text}`)
+      } else {
+        console.warn(`[analyze-irb-file] failed to extract text from ${entry.name} (ext: ${entry.ext})`)
       }
     }
 
