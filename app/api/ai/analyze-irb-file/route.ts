@@ -229,8 +229,33 @@ function parseAnalysisResult(raw: string): {
 } {
   // Handle both bare JSON and markdown code blocks
   const match = raw.match(/```(?:json)?\s*(\{[\s\S]*?\})\s*```/) ?? raw.match(/(\{[\s\S]*\})/)
-  if (!match) throw new Error('No JSON object in response')
-  const parsed: { summary?: string; items?: RawAnalysisItem[] } = JSON.parse(match[1] ?? match[0])
+  if (!match) {
+    console.warn('[analyze-irb-file] no JSON object in response, raw (first 300):', raw.slice(0, 300))
+    return { matched: [], newSuggestions: [], summary: '' }
+  }
+
+  let parsed: { summary?: string; items?: RawAnalysisItem[] }
+  try {
+    parsed = JSON.parse(match[1] ?? match[0])
+  } catch (e) {
+    // JSON이 잘린 경우 — items 배열까지만 복구 시도
+    console.warn('[analyze-irb-file] JSON parse failed (likely truncated):', e instanceof Error ? e.message : e)
+    const rawJson = match[1] ?? match[0]
+    // 마지막으로 완성된 객체까지만 잘라서 재시도
+    try {
+      const lastCompleteItem = rawJson.lastIndexOf('},')
+      if (lastCompleteItem > 0) {
+        const truncated = rawJson.slice(0, lastCompleteItem + 1) + ']}}'
+        parsed = JSON.parse(truncated)
+        console.log('[analyze-irb-file] recovered truncated JSON, items:', (parsed.items ?? []).length)
+      } else {
+        return { matched: [], newSuggestions: [], summary: '' }
+      }
+    } catch {
+      return { matched: [], newSuggestions: [], summary: '' }
+    }
+  }
+
   const items: RawAnalysisItem[] = parsed.items ?? []
 
   const matched: ModuleRecommendation[] = []
@@ -376,14 +401,14 @@ export async function POST(req: NextRequest) {
 
       const response = await anthropic.messages.create({
         model: 'claude-sonnet-4-5',
-        max_tokens: 2048,
+        max_tokens: 4096,
         messages: [{ role: 'user', content }] as any,
       })
       rawText = response.content[0]?.type === 'text' ? response.content[0].text : ''
     } else {
       rawText = await generateText({
         messages: [{ role: 'user', content: buildTextPrompt(combinedText, moduleList) }],
-        maxTokens: 2048,
+        maxTokens: 4096,
       })
     }
     const { matched, newSuggestions, summary } = parseAnalysisResult(rawText)
