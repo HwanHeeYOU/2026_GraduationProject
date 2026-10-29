@@ -72,6 +72,31 @@ export async function POST(
       )
     }
 
+    // 같은 기관에 동일한 이름의 모듈이 이미 연결되어 있으면 기존 항목 반환 (중복 방지)
+    const existingLink = await prisma.institutionModule.findFirst({
+      where: {
+        institutionId: params.id,
+        module: { name },
+      },
+      include: { module: true },
+    })
+    if (existingLink) {
+      return NextResponse.json({
+        module: {
+          id: existingLink.module.id,
+          name: existingLink.module.name,
+          description: existingLink.module.description,
+          category: existingLink.module.category,
+          isRequired: existingLink.module.isRequired,
+          order: existingLink.module.order,
+          hasFormula: existingLink.module.hasFormula,
+          promptHint: existingLink.module.promptHint,
+          institutionIsRequired: existingLink.isRequired,
+          priority: existingLink.priority,
+        },
+      })
+    }
+
     const [maxOrder, maxPriority] = await Promise.all([
       prisma.iRBModule.aggregate({ _max: { order: true } }),
       prisma.institutionModule.aggregate({

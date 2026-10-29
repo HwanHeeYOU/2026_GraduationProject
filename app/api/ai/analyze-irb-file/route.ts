@@ -202,9 +202,10 @@ ${moduleList}
 
 규칙:
 - "summary"는 문서에 실제로 있는 내용만 근거로 작성하고, 문서에 없는 내용은 지어내지 마세요. 문서가 양식/가이드라인일 뿐 연구 내용이 담겨있지 않다면 빈 문자열로 두세요
-- "items"의 "type": "matched"는 위 모듈 목록 중 하나와 대응될 때, "type": "new"는 목록의 어떤 항목으로도 표현되지 않는 새로운 요구사항을 발견했을 때 사용하세요
+- "items"의 "type": "matched"는 위 모듈 목록 중 하나와 대응될 때 사용하고, "type": "new"는 위 목록에 있는 모든 항목과 이름이나 의미가 명확히 다른 완전히 새로운 요구사항을 발견했을 때만 사용하세요
 - "matched"인 경우 moduleId는 반드시 위 목록에 있는 ID만 사용하고 suggested* 필드는 생략하세요
 - "new"인 경우 moduleId는 생략하고 suggestedName/suggestedCategory/suggestedDescription을 채우세요
+- "new"의 suggestedName은 위 모듈 목록에 이미 존재하는 이름(또는 그 이름의 일부)과 같거나 유사한 이름을 절대 사용하지 마세요. 위 목록에 이미 있는 개념이라면 반드시 "matched"로 처리하세요
 - "required": 문서에서 해당 항목을 명시적으로 요구하는 경우
 - "recommended": 문서 내용으로 미루어 작성이 권장되는 경우
 - 관련 없는 항목은 "items"에 포함하지 마세요
