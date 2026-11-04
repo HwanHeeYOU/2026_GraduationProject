@@ -9,6 +9,8 @@ interface BulkGeneratePanelProps {
   projectId: string
   initialDescription?: string
   onGenerated: (moduleId: string, content: string) => void
+  /** true면 자체 glass-card 래퍼 없이 내용만 렌더링 (탭 안에 임베드될 때) */
+  embedded?: boolean
 }
 
 interface Progress {
@@ -17,7 +19,7 @@ interface Progress {
   currentName: string
 }
 
-export default function BulkGeneratePanel({ modules, projectId, initialDescription, onGenerated }: BulkGeneratePanelProps) {
+export default function BulkGeneratePanel({ modules, projectId, initialDescription, onGenerated, embedded }: BulkGeneratePanelProps) {
   const [description, setDescription] = useState(initialDescription ?? '')
   const [isGenerating, setIsGenerating] = useState(false)
   const [progress, setProgress] = useState<Progress | null>(null)
@@ -81,16 +83,20 @@ export default function BulkGeneratePanel({ modules, projectId, initialDescripti
   }
 
   return (
-    <div className="glass-card p-5 mb-6 space-y-4">
-      <div className="flex items-center gap-2">
-        <h2 className="text-sm font-semibold text-white">실험 설명으로 전체 초안 생성</h2>
-      </div>
+    <div className={embedded ? 'space-y-4' : 'glass-card p-5 mb-6 space-y-4'}>
+      {!embedded && (
+        <div className="flex items-center gap-2">
+          <h2 className="text-sm font-semibold text-white">실험 설명으로 전체 초안 생성</h2>
+        </div>
+      )}
 
       <p className="text-xs text-slate-400">
-        연구 실험을 설명하면 선택된 모든 모듈의 초안을 자동으로 작성해드립니다.
+        {!embedded && <>연구 실험을 설명하면 선택된 모든 모듈의 초안을 자동으로 작성해드립니다.</>}
         {initialDescription && (
-          <span className="ml-1.5 text-emerald-400">
-            ✓ 프로젝트 생성 시 첨부한 파일 내용을 AI가 요약해 자동으로 채웠습니다 — 필요하면 수정하세요
+          <span className={embedded ? '' : 'ml-1.5'}>
+            <span className="text-emerald-400">
+              ✓ 프로젝트 생성 시 첨부한 파일 내용을 AI가 요약해 자동으로 채웠습니다 — 필요하면 수정하세요
+            </span>
           </span>
         )}
       </p>

@@ -1,14 +1,16 @@
 'use client'
 
-import { useState, useRef, useCallback } from 'react'
-import { ArrowRight } from 'lucide-react'
+import { useState, useRef, useCallback, useEffect } from 'react'
+import { ArrowRight, FileText } from 'lucide-react'
 import DashboardLayout from '@/components/dashboard/DashboardLayout'
 import ModuleCard, { type ProjectModuleWithMeta } from './ModuleCard'
-import BulkGeneratePanel from './BulkGeneratePanel'
+import IRBFormDraftPanel from './IRBFormDraftPanel'
 import NetworkSyncProvider from './NetworkSyncProvider'
 import RejectionPanel, { type RejectionNote } from './RejectionPanel'
+import type { IRBFormDraftResult } from '@/lib/irb/types'
 
-const SESSION_KEY = 'irb_research_description'
+const SESSION_KEY_DRAFT = 'irb_form_draft_output'
+const SESSION_KEY_INCOMPLETE = 'irb_incomplete_keys'
 
 interface WorkspaceClientProps {
   projectId: string
@@ -17,6 +19,7 @@ interface WorkspaceClientProps {
   modules: ProjectModuleWithMeta[]
   rejectionNotes: RejectionNote[]
   sourceSummary?: string | null
+  initialFormDraft?: IRBFormDraftResult
   userName?: string | null
 }
 
@@ -26,13 +29,14 @@ export default function WorkspaceClient({
   institutionName,
   modules,
   rejectionNotes: initialRejectionNotes,
-  sourceSummary,
+  initialFormDraft,
   userName,
 }: WorkspaceClientProps) {
   const [bulkContents, setBulkContents] = useState<Record<string, string>>({})
   const [rejectionNotes, setRejectionNotes] = useState<RejectionNote[]>(initialRejectionNotes)
   const [navigating, setNavigating] = useState(false)
-  const [navStep, setNavStep] = useState<'idle' | 'saving' | 'summarizing'>('idle')
+  // 리뷰 페이지에서 전달된 미완 항목 (question 텍스트 기반)
+  const [incompleteQuestions, setIncompleteQuestions] = useState<string[]>([])
 
   // 각 ModuleCard의 flushSave / getContent 함수 registry
   const flushRegistry = useRef<Map<string, () => Promise<void>>>(new Map())
@@ -48,10 +52,6 @@ export default function WorkspaceClient({
     return () => contentRegistry.current.delete(moduleId)
   }, [])
 
-  const handleBulkGenerated = (moduleId: string, content: string) => {
-    setBulkContents((prev) => ({ ...prev, [moduleId]: content }))
-  }
-
   const unresolvedNoteByModule = new Map<string, RejectionNote>()
   for (const note of rejectionNotes) {
     if (!note.resolved && note.projectModuleId && !unresolvedNoteByModule.has(note.projectModuleId)) {
@@ -59,53 +59,39 @@ export default function WorkspaceClient({
     }
   }
 
-  const handleReviewClick = async () => {
-    setNavigating(true)
-    setNavStep('saving')
-
-    // Step 1: 모든 모듈 즉시 저장
+  // 마운트 시 리뷰에서 저장한 미완 항목 읽기
+  useEffect(() => {
     try {
-      await Promise.all(Array.from(flushRegistry.current.values()).map((fn) => fn()))
-    } catch {
-      // 저장 실패해도 계속 진행
-    }
-
-    // Step 2: 현재 모든 모듈 내용 수집
-    const moduleContents = modules.map((mod) => {
-      const getContent = contentRegistry.current.get(mod.id)
-      return {
-        name: mod.module.name,
-        content: getContent ? getContent() : mod.content,
-      }
-    }).filter((m) => m.content.trim().length > 0)
-
-    // Step 3: 내용이 있으면 AI 요약 → sessionStorage 저장
-    if (moduleContents.length > 0) {
-      setNavStep('summarizing')
-      try {
-        const res = await fetch('/api/ai/summarize-modules', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ modules: moduleContents }),
-        })
-        if (res.ok) {
-          const data = await res.json() as { summary: string }
-          if (data.summary) {
-            try { sessionStorage.setItem(SESSION_KEY, data.summary) } catch {}
-          }
+      const raw = sessionStorage.getItem(SESSION_KEY_INCOMPLETE)
+      if (raw) {
+        const keys = JSON.parse(raw) as string[]
+        if (Array.isArray(keys) && keys.length > 0) {
+          setIncompleteQuestions(keys)
+          // 읽고 나면 지움 — 한 번만 표시
+          sessionStorage.removeItem(SESSION_KEY_INCOMPLETE)
         }
-      } catch {
-        // 요약 실패해도 이동은 진행 — 기존 sessionStorage 값 유지
       }
+    } catch {
+      // 무시
     }
+  }, [])
 
-    window.location.href = `/projects/${projectId}/review`
-  }
-
-  const navLabel =
-    navStep === 'saving' ? '저장 중...' :
-    navStep === 'summarizing' ? '내용 정리 중...' :
-    '최종 검토'
+  // IRB 초안 생성 완료 → sessionStorage 저장 후 /review로 이동
+  const handleDraftComplete = useCallback(async (rawText: string, sectionsJson: string) => {
+    setNavigating(true)
+    try {
+      // 생성 결과를 sessionStorage에 저장
+      try {
+        sessionStorage.setItem(SESSION_KEY_DRAFT, sectionsJson)
+      } catch {
+        // sessionStorage 실패해도 이동은 진행
+      }
+      // 모든 모듈 저장
+      await Promise.all(Array.from(flushRegistry.current.values()).map((fn) => fn())).catch(() => {})
+    } finally {
+      window.location.href = `/projects/${projectId}/review`
+    }
+  }, [projectId])
 
   return (
     <DashboardLayout userName={userName}>
@@ -118,11 +104,11 @@ export default function WorkspaceClient({
               <p className="text-sm text-slate-400 mt-0.5">{institutionName}</p>
             </div>
             <button
-              onClick={handleReviewClick}
+              onClick={() => { setNavigating(true); window.location.href = `/projects/${projectId}/review` }}
               disabled={navigating}
-              className="cta-primary flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm text-white font-medium shrink-0 disabled:opacity-60"
+              className="glass-button flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm text-slate-300 font-medium shrink-0 disabled:opacity-60"
             >
-              {navLabel}
+              {navigating ? '이동 중...' : '최종 검토'}
               <ArrowRight size={14} />
             </button>
           </div>
@@ -135,15 +121,24 @@ export default function WorkspaceClient({
             onNotesChange={setRejectionNotes}
           />
 
-          {/* 실험 설명으로 전체 모듈 일괄 생성 */}
-          {modules.length > 0 && (
-            <BulkGeneratePanel
-              modules={modules}
+          {/* IRB 서식 자동 초안 생성 — 유일한 초안 생성 진입점 */}
+          <div className="glass-card p-5 mb-6 space-y-3">
+            <div className="flex items-center gap-2">
+              <FileText size={15} className="text-blue-400" />
+              <h2 className="text-sm font-semibold text-white">IRB 서식 자동 초안 생성</h2>
+            </div>
+            <p className="text-xs text-slate-400">
+              업로드한 IRB 원본 서식 파일의 각 문항에 맞게 정보를 매핑하여 파일별 초안을 생성합니다.
+              생성 완료 후 자동으로 최종 검토 페이지로 이동합니다.
+            </p>
+            <IRBFormDraftPanel
+              initialFormDraft={initialFormDraft}
+              embedded
+              onDraftComplete={handleDraftComplete}
+              incompleteQuestions={incompleteQuestions}
               projectId={projectId}
-              initialDescription={sourceSummary ?? ''}
-              onGenerated={handleBulkGenerated}
             />
-          )}
+          </div>
 
           {/* 모듈 카드 그리드 */}
           {modules.length === 0 ? (

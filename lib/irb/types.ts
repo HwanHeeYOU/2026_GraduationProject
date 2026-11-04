@@ -14,12 +14,18 @@ export interface NewModuleSuggestion {
   matchedSection: string
 }
 
-// IRB 폼 초안 생성 관련 타입
+// ── IRB 3-Phase 파이프라인 타입 ─────────────────────────────────
+
+/**
+ * Phase 1 결과: LLM이 의미 기반으로 중복 통합한 최종 문항 목록
+ */
 export interface IRBFormQuestion {
-  key: string           // 내부 식별자 (예: "researcher_name")
-  label: string         // 사용자에게 보여줄 질문 (예: "연구책임자 성명")
+  key: string           // 내부 식별자 (예: "q_0_연구_제목")
+  label: string         // 사용자에게 보여줄 통합 질문 (예: "연구 제목")
   placeholder?: string
   multiline?: boolean   // textarea 여부
+  /** 이 통합 문항이 어떤 원본 표현들을 하나로 합쳤는지 (예: ["연구 제목", "과제명"]) */
+  originalVariants?: string[]
 }
 
 export interface IRBFormFileSection {
@@ -28,12 +34,20 @@ export interface IRBFormFileSection {
 }
 
 export interface IRBFormDraftResult {
-  questions: IRBFormQuestion[]           // 중복 통합된 질문 목록
-  fileSections: IRBFormFileSection[]     // 파일별 문항 매핑
+  questions: IRBFormQuestion[]           // Phase 1: LLM 중복 통합 질문 목록
+  fileSections: IRBFormFileSection[]     // 파일별 문항 → answerKey 매핑
 }
 
+/**
+ * Phase 2 입력: 사용자가 채운 답변 맵
+ * key = IRBFormQuestion.key, value = 사용자 입력 텍스트
+ */
+export type IRBUserAnswers = Record<string, string>
+
+/**
+ * Phase 3 결과: 파일별 문항-답변 초안
+ */
 export interface IRBFormDraftOutput {
-  // 파일별 [문항][답변] 결과
   sections: Array<{
     fileName: string
     items: Array<{ question: string; answer: string }>
