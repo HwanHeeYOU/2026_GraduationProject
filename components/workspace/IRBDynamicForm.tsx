@@ -18,6 +18,9 @@ interface IRBDynamicFormProps {
   isSubmitting: boolean
   /** 리뷰에서 돌아올 때 미완 항목 question 텍스트 배열 */
   incompleteQuestions?: string[]
+  /** 이전에 저장된 입력 (돌아왔을 때 채워서 보여줌) */
+  initialAnswers?: IRBUserAnswers
+  initialNaturalInput?: string
 }
 
 type InputMode = 'individual' | 'natural'
@@ -42,10 +45,12 @@ export default function IRBDynamicForm({
   onSubmit,
   isSubmitting,
   incompleteQuestions = [],
+  initialAnswers,
+  initialNaturalInput,
 }: IRBDynamicFormProps) {
   const [mode, setMode] = useState<InputMode>('individual')
-  const [answers, setAnswers] = useState<IRBUserAnswers>({})
-  const [naturalInput, setNaturalInput] = useState('')
+  const [answers, setAnswers] = useState<IRBUserAnswers>(initialAnswers ?? {})
+  const [naturalInput, setNaturalInput] = useState(initialNaturalInput ?? '')
   const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set())
   const [showQuestionPanel, setShowQuestionPanel] = useState(false)
 

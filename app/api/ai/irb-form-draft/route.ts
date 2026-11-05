@@ -3,12 +3,21 @@ import { getServerSession } from 'next-auth'
 import { authOptions } from '@/lib/auth'
 import { prisma } from '@/lib/prisma'
 import { generateText, isLuxiaProvider } from '@/lib/ai-client'
-import type { IRBFormDraftResult, IRBFormDraftOutput, IRBFormQuestion, IRBUserAnswers } from '@/lib/irb/types'
+import type {
+  IRBFormDraftResult, IRBFormDraftOutput, IRBFormQuestion, IRBUserAnswers, IRBUserInput,
+} from '@/lib/irb/types'
+import {
+  MISSING_MARKER,
+  parseStoredDraft,
+  mergeSupplements,
+  findPatchTargets,
+  applyAnswers,
+  buildRawText,
+} from '@/lib/irb/draftStore'
 
 export const maxDuration = 120
 
 const MAX_FILE_SIZE = 10 * 1024 * 1024
-const MISSING_MARKER = '[작성 필요: 추가 정보 입력 요망]'
 
 // ── 파일 텍스트 추출 ──────────────────────────────────────────
 async function extractText(name: string, buffer: Buffer): Promise<string | null> {
@@ -338,6 +347,40 @@ function similarityBasedMerge(
   return { questions, fileSections }
 }
 
+// ── 지정한 문항들의 답변 생성 (Phase 3 본체 · PATCH 보완에서 공용) ─────
+async function generateItemAnswers(
+  fileName: string,
+  items: { question: string; answerKey: string }[],
+  mergedQuestions: IRBFormQuestion[],
+  userAnswers: IRBUserAnswers,
+  naturalLanguageInput: string,
+): Promise<{ question: string; answer: string }[]> {
+  const collected: { question: string; answer: string }[] = []
+
+  // 문항을 CHUNK_SIZE 단위로 나눠 처리
+  for (let start = 0; start < items.length; start += CHUNK_SIZE) {
+    const chunk = items.slice(start, start + CHUNK_SIZE)
+    const prompt = buildMappingPrompt(fileName, chunk, mergedQuestions, userAnswers, naturalLanguageInput)
+    const raw = await generateText({
+      messages: [{ role: 'user', content: prompt }],
+      maxTokens: 2500,
+    })
+    const parsed = parseFileOutput(raw)
+
+    // 파싱 결과를 원본 문항 텍스트 기준으로 매핑 (퍼지 매칭)
+    for (const item of chunk) {
+      // 1순위: LLM 출력에서 퍼지 매칭
+      let answer = matchParsedToOriginal(parsed, item.question)
+      // 2순위: 직접 입력값이 있으면 안전망으로 사용 (LLM이 누락했을 때)
+      if (!answer && userAnswers[item.answerKey]?.trim()) {
+        answer = userAnswers[item.answerKey]
+      }
+      collected.push({ question: item.question, answer: answer ?? MISSING_MARKER })
+    }
+  }
+  return collected
+}
+
 // ── LLM 중복통합 결과 타입 ─────────────────────────────────────
 interface LLMMergeResult {
   mergedQuestions: Array<{
@@ -537,71 +580,44 @@ export async function POST(req: NextRequest) {
       const perFileSections: IRBFormDraftOutput['sections'] = []
 
       for (const fileSection of fileSections) {
-        const allItems = fileSection.items
-        const allOriginalQuestions = allItems.map((i) => i.question)
-        const collectedItems: { question: string; answer: string }[] = []
-
-        // 문항을 CHUNK_SIZE 단위로 나눠 처리
-        for (let start = 0; start < allItems.length; start += CHUNK_SIZE) {
-          const chunk = allItems.slice(start, start + CHUNK_SIZE)
-          const prompt = buildMappingPrompt(
-            fileSection.fileName,
-            chunk,
-            mergedQuestions,
-            userAnswers ?? {},
-            naturalLanguageInput ?? '',
-          )
-          const raw = await generateText({
-            messages: [{ role: 'user', content: prompt }],
-            maxTokens: 2500,
-          })
-
-          const parsed = parseFileOutput(raw)
-
-          // 파싱 결과를 원본 문항 텍스트 기준으로 매핑 (퍼지 매칭)
-          for (const item of chunk) {
-            // 1순위: LLM 출력에서 퍼지 매칭
-            let answer = matchParsedToOriginal(parsed, item.question)
-
-            // 2순위: 직접 입력값이 있으면 안전망으로 사용 (LLM이 누락했을 때)
-            if (!answer && userAnswers[item.answerKey]?.trim()) {
-              answer = userAnswers[item.answerKey]
-            }
-
-            collectedItems.push({ question: item.question, answer: answer ?? MISSING_MARKER })
-          }
-        }
+        const collectedItems = await generateItemAnswers(
+          fileSection.fileName,
+          fileSection.items,
+          mergedQuestions,
+          userAnswers ?? {},
+          naturalLanguageInput ?? '',
+        )
 
         // 원본 문항 순서 보장
         const collectedMap = new Map(collectedItems.map((i) => [i.question, i.answer]))
         perFileSections.push({
           fileName: fileSection.fileName,
-          items: allOriginalQuestions.map((q) => ({
-            question: q,
-            answer: collectedMap.get(q) ?? MISSING_MARKER,
+          items: fileSection.items.map((i) => ({
+            question: i.question,
+            answer: collectedMap.get(i.question) ?? MISSING_MARKER,
           })),
         })
       }
 
-      // rawText 생성
-      const rawText = perFileSections
-        .map((s) => {
-          const items = s.items
-            .map((i) => `[문항] ${i.question}\n[답변] ${i.answer}`)
-            .join('\n\n')
-          return `[파일: ${s.fileName}]\n${items}`
-        })
-        .join('\n\n' + '─'.repeat(40) + '\n\n')
+      const output: IRBFormDraftOutput = { sections: perFileSections, rawText: buildRawText(perFileSections) }
 
-      const output: IRBFormDraftOutput = { sections: perFileSections, rawText }
-
-      // Phase 3 완료 → DB에 최신 초안 저장 (projectId가 있을 때)
+      // Phase 3 완료 → DB 저장 (projectId가 있을 때)
+      //  - formDraftJson   : 문항 구조 (덮어쓰지 않고 유지 → 워크스페이스로 돌아와도 재업로드 불필요)
+      //  - draftOutputJson : 생성된 초안
+      //  - userInputJson   : 사용자 입력 원본 (보완/재생성 때 AI에 다시 전달)
       const projectId = body.projectId as string | undefined
       if (projectId) {
         try {
           await prisma.project.updateMany({
             where: { id: projectId, userId: session.user.id },
-            data: { formDraftJson: JSON.stringify(output) },
+            data: {
+              formDraftJson: JSON.stringify({ questions: mergedQuestions, fileSections } satisfies IRBFormDraftResult),
+              draftOutputJson: JSON.stringify(output),
+              userInputJson: JSON.stringify({
+                userAnswers: userAnswers ?? {},
+                naturalLanguageInput: naturalLanguageInput ?? '',
+              } satisfies IRBUserInput),
+            },
           })
         } catch (e) {
           // DB 저장 실패는 응답을 막지 않음 — 로그만
@@ -620,8 +636,12 @@ export async function POST(req: NextRequest) {
 }
 
 // ══════════════════════════════════════════════════════════
-// PATCH: 미완 항목만 LLM으로 치환 (Patch Update)
-// Body: { projectId, currentOutput: IRBFormDraftOutput, supplements: { question, fileName, supplement }[] }
+// PATCH: 검토 화면 보충 입력 → 저장된 입력과 병합 → 누락 문항만 AI 재생성
+// Body: { projectId, supplements: { answerKey, supplement }[] }
+//  1) 보충 입력을 userAnswers 에 병합하고 userInputJson 에 저장 (이후 재생성의 근거가 됨)
+//  2) 같은 answerKey 를 쓰는 **모든 파일**의 누락 문항만 대상으로 AI 호출
+//     (자연어 입력 + 병합된 전체 입력이 컨텍스트로 다시 전달됨)
+//  3) 대상 문항만 교체 — 이미 채워졌거나 사용자가 직접 수정한 답변은 코드 레벨에서 보존
 // ══════════════════════════════════════════════════════════
 export async function PATCH(req: NextRequest) {
   const session = await getServerSession(authOptions)
@@ -629,128 +649,50 @@ export async function PATCH(req: NextRequest) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
   }
 
-  let body: {
-    projectId?: string
-    currentOutput: IRBFormDraftOutput
-    supplements: Array<{
-      fileName: string
-      question: string
-      supplement: string   // 유저가 입력한 추가 정보
-    }>
-  }
+  let body: { projectId?: string; supplements?: Array<{ answerKey: string; supplement: string }> }
   try { body = await req.json() }
   catch { return NextResponse.json({ error: 'BadRequest' }, { status: 400 }) }
 
-  const { projectId, currentOutput, supplements } = body
-  if (!currentOutput?.sections?.length || !supplements?.length) {
-    return NextResponse.json({ error: 'BadRequest', message: 'currentOutput과 supplements가 필요합니다.' }, { status: 400 })
+  const supplements = (body.supplements ?? []).filter((s) => s?.answerKey && s.supplement?.trim())
+  if (!body.projectId || supplements.length === 0) {
+    return NextResponse.json({ error: 'BadRequest', message: 'projectId와 supplements가 필요합니다.' }, { status: 400 })
   }
 
-  // supplement를 (fileName, question) 키로 빠른 조회용 맵으로 구성
-  const suppMap = new Map<string, string>()
-  for (const s of supplements) {
-    suppMap.set(`${s.fileName}|||${s.question.trim()}`, s.supplement.trim())
+  const project = await prisma.project.findFirst({
+    where: { id: body.projectId, userId: session.user.id },
+    select: { id: true, formDraftJson: true, draftOutputJson: true, userInputJson: true },
+  })
+  if (!project) {
+    return NextResponse.json({ error: 'NotFound', message: '프로젝트를 찾을 수 없습니다.' }, { status: 404 })
+  }
+
+  const stored = parseStoredDraft(project)
+  if (!stored.output || !stored.effectiveStructure) {
+    return NextResponse.json({ error: 'BadRequest', message: '생성된 초안이 없습니다.' }, { status: 400 })
   }
 
   try {
-    // 파일별로 미완 항목만 LLM 치환
-    const updatedSections: IRBFormDraftOutput['sections'] = []
+    const structure = stored.effectiveStructure
+    const userAnswers = mergeSupplements(stored.userInput.userAnswers, supplements)
+    const naturalLanguageInput = stored.userInput.naturalLanguageInput
 
-    for (const sec of currentOutput.sections) {
-      // 이 파일에서 치환이 필요한 항목만 추출
-      const toFill = sec.items.filter((item) => {
-        const supp = suppMap.get(`${sec.fileName}|||${item.question.trim()}`)
-        return supp && item.answer.includes(MISSING_MARKER)
-      })
+    const targets = findPatchTargets(stored.output, structure, supplements.map((s) => s.answerKey))
 
-      if (toFill.length === 0) {
-        // 치환할 항목 없으면 그대로 유지
-        updatedSections.push(sec)
-        continue
-      }
-
-      // LLM 프롬프트: 기존 초안 유지 + MISSING 항목만 치환
-      const existingDraft = sec.items
-        .map((i) => `[문항] ${i.question}\n[답변] ${i.answer}`)
-        .join('\n\n')
-
-      const supplementList = toFill
-        .map((item) => {
-          const supp = suppMap.get(`${sec.fileName}|||${item.question.trim()}`)!
-          return `[문항] ${item.question}\n[추가 정보] ${supp}`
-        })
-        .join('\n\n')
-
-      const prompt = `[시스템 지침 — 절대 준수]
-당신은 IRB 서류 작성 전문가입니다.
-
-★★ 핵심 규칙 ★★
-1. 아래 [기존 초안]의 모든 내용을 100% 그대로 유지하세요
-2. 단, "${MISSING_MARKER}"라고 표시된 항목만 [추가 정보]를 바탕으로 알맞은 텍스트로 치환하세요
-3. 기존에 잘 작성된 다른 항목의 내용을 절대 수정하거나 축약하지 마세요
-4. 추가 정보가 없는 MISSING 항목은 그대로 "${MISSING_MARKER}"로 유지하세요
-
-=== [기존 초안] ===
-[파일: ${sec.fileName}]
-${existingDraft}
-
-=== [치환할 항목의 추가 정보] ===
-${supplementList}
-
-출력 규칙:
-- 마크다운, 인사말, 설명 없이 아래 형식만 출력
-- 반드시 모든 ${sec.items.length}개 문항을 순서대로 포함
-- [문항] 뒤에는 원본 문항 텍스트 그대로 복사
-- MISSING이 아닌 항목: 기존 답변 그대로 출력
-- MISSING이고 추가 정보 있는 항목: 추가 정보를 IRB 문서에 적합한 한국어로 작성하여 출력
-- MISSING이고 추가 정보 없는 항목: 정확히 "${MISSING_MARKER}" 출력
-
-출력 형식:
-[파일: ${sec.fileName}]
-[문항] 원본문항텍스트
-[답변] 답변내용`
-
-      const raw = await generateText({
-        messages: [{ role: 'user', content: prompt }],
-        maxTokens: 3000,
-      })
-
-      const parsed = parseFileOutput(raw)
-      const parsedMap = new Map(parsed.map((i) => [i.question.trim(), i.answer]))
-
-      // 원본 순서 보장 + 퍼지 매칭
-      const updatedItems = sec.items.map((item) => {
-        const matched = matchParsedToOriginal(parsed, item.question)
-        return { question: item.question, answer: matched ?? item.answer }
-      })
-
-      updatedSections.push({ fileName: sec.fileName, items: updatedItems })
-      void parsedMap // suppress unused warning
+    const updates: Array<{ fileName: string; question: string; answer: string }> = []
+    for (const t of targets) {
+      const answers = await generateItemAnswers(t.fileName, t.items, structure.questions, userAnswers, naturalLanguageInput)
+      for (const a of answers) updates.push({ fileName: t.fileName, question: a.question, answer: a.answer })
     }
 
-    // rawText 재생성
-    const rawText = updatedSections
-      .map((s) => {
-        const items = s.items
-          .map((i) => `[문항] ${i.question}\n[답변] ${i.answer}`)
-          .join('\n\n')
-        return `[파일: ${s.fileName}]\n${items}`
-      })
-      .join('\n\n' + '─'.repeat(40) + '\n\n')
+    const result: IRBFormDraftOutput = applyAnswers(stored.output, updates)
 
-    const result: IRBFormDraftOutput = { sections: updatedSections, rawText }
-
-    // DB에 최신 초안 저장
-    if (projectId) {
-      try {
-        await prisma.project.updateMany({
-          where: { id: projectId, userId: session.user.id },
-          data: { formDraftJson: JSON.stringify(result) },
-        })
-      } catch (e) {
-        console.warn('[irb-form-draft PATCH] DB save failed:', e)
-      }
-    }
+    await prisma.project.update({
+      where: { id: project.id },
+      data: {
+        draftOutputJson: JSON.stringify(result),
+        userInputJson: JSON.stringify({ userAnswers, naturalLanguageInput } satisfies IRBUserInput),
+      },
+    })
 
     return NextResponse.json(result satisfies IRBFormDraftOutput)
   } catch (e) {

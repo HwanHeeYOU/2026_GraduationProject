@@ -45,6 +45,15 @@ export interface IRBFormDraftResult {
 export type IRBUserAnswers = Record<string, string>
 
 /**
+ * 사용자가 입력한 원본 정보 (DB: Project.userInputJson)
+ * 보완/재생성 때 AI에 다시 전달되는 근거 자료다.
+ */
+export interface IRBUserInput {
+  userAnswers: IRBUserAnswers
+  naturalLanguageInput: string
+}
+
+/**
  * Phase 3 결과: 파일별 문항-답변 초안
  */
 export interface IRBFormDraftOutput {

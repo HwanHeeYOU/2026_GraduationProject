@@ -9,6 +9,7 @@ import type {
   IRBFormDraftOutput,
   IRBFormDraftResult,
   IRBUserAnswers,
+  IRBUserInput,
 } from '@/lib/irb/types'
 import IRBDynamicForm from './IRBDynamicForm'
 
@@ -36,9 +37,11 @@ interface IRBFormDraftPanelProps {
   incompleteQuestions?: string[]
   /** DB 저장용 프로젝트 ID */
   projectId?: string
+  /** 이전에 입력했던 정보 — 저장된 서식을 그대로 쓸 때만 폼에 미리 채운다 */
+  initialUserInput?: IRBUserInput
 }
 
-export default function IRBFormDraftPanel({ initialFormDraft, embedded, onDraftComplete, incompleteQuestions = [], projectId }: IRBFormDraftPanelProps) {
+export default function IRBFormDraftPanel({ initialFormDraft, embedded, onDraftComplete, incompleteQuestions = [], projectId, initialUserInput }: IRBFormDraftPanelProps) {
   // fileSections가 없거나 비어있으면 저장된 서식 없음으로 처리 (방어적 코드)
   const hasStoredForm = !!initialFormDraft &&
     Array.isArray(initialFormDraft.fileSections) &&
@@ -56,6 +59,8 @@ export default function IRBFormDraftPanel({ initialFormDraft, embedded, onDraftC
   const [isGenerating, setIsGenerating] = useState(false)
   const [useStoredForm, setUseStoredForm] = useState(hasStoredForm)
   const [files, setFiles] = useState<File[]>([])
+  // 새 파일로 문항을 다시 뽑으면 키가 달라지므로 이전 입력은 버린다
+  const [prefill, setPrefill] = useState<IRBUserInput | undefined>(initialUserInput)
   const [copiedKey, setCopiedKey] = useState<string | null>(null)
   const [openSections, setOpenSections] = useState<Record<string, boolean>>({})
   const inputRef = useRef<HTMLInputElement>(null)
@@ -93,6 +98,7 @@ export default function IRBFormDraftPanel({ initialFormDraft, embedded, onDraftC
         setPhase({ status: 'error', message: '파일에서 문항을 찾지 못했습니다. 다른 파일을 시도해 보세요.' })
         return
       }
+      setPrefill(undefined)
       setPhase({ status: 'form', draft })
       // 내보내기 때 양식에 답변을 채워 넣을 수 있도록 원본 HWPX 보관
       if (projectId) {
@@ -357,6 +363,8 @@ export default function IRBFormDraftPanel({ initialFormDraft, embedded, onDraftC
             onSubmit={handleGenerate}
             isSubmitting={isGenerating}
             incompleteQuestions={incompleteQuestions}
+            initialAnswers={prefill?.userAnswers}
+            initialNaturalInput={prefill?.naturalLanguageInput}
           />
 
           <button type="button" onClick={handleReset}

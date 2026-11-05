@@ -4,6 +4,7 @@ import { authOptions } from '@/lib/auth'
 import { prisma } from '@/lib/prisma'
 import WorkspaceClient from '@/components/workspace/WorkspaceClient'
 import type { IRBFormDraftResult } from '@/lib/irb/types'
+import { parseStoredDraft } from '@/lib/irb/draftStore'
 
 interface WorkspacePageProps {
   params: { id: string }
@@ -56,31 +57,11 @@ export default async function WorkspacePage({ params }: WorkspacePageProps) {
     },
   }))
 
-  // formDraftJson이 DB에 저장되어 있으면 파싱해서 전달
-  // 주의: formDraftJson에는 IRBFormDraftResult(문항 구조) 또는
-  //       IRBFormDraftOutput(생성된 초안)이 저장될 수 있음
-  //       → IRBFormDraftResult는 questions + fileSections를 가짐
-  //       → IRBFormDraftOutput은 sections(답변 포함)를 가짐
-  //       워크스페이스에는 문항 구조(IRBFormDraftResult)만 필요
-  let formDraft: IRBFormDraftResult | undefined
-  if (project.formDraftJson) {
-    try {
-      const parsed = JSON.parse(project.formDraftJson)
-      // IRBFormDraftResult 형태인지 확인: questions 배열 + fileSections 배열
-      if (
-        Array.isArray(parsed?.questions) &&
-        parsed.questions.length > 0 &&
-        Array.isArray(parsed?.fileSections) &&
-        parsed.fileSections.length > 0
-      ) {
-        formDraft = parsed as IRBFormDraftResult
-      }
-      // IRBFormDraftOutput(sections만 있는 형태)이면 formDraft는 undefined 유지
-      // → 패널이 파일 업로드 모드로 시작
-    } catch {
-      // 파싱 실패 시 undefined — 패널에서 직접 파일 업로드 모드로 시작
-    }
-  }
+  // 문항 구조(formDraftJson)와 사용자가 입력했던 정보(userInputJson)를 복원한다.
+  // 초안 생성 후에도 구조가 유지되므로 돌아와도 파일을 다시 올릴 필요가 없고, 입력값도 채워진 채로 보인다.
+  // (예전 프로젝트처럼 구조가 없으면 formDraft는 undefined → 패널이 업로드 모드로 시작)
+  const stored = parseStoredDraft(project)
+  const formDraft: IRBFormDraftResult | undefined = stored.structure ?? undefined
 
   return (
     <WorkspaceClient
@@ -91,6 +72,7 @@ export default async function WorkspacePage({ params }: WorkspacePageProps) {
       rejectionNotes={rejectionNotes}
       sourceSummary={project.sourceSummary}
       initialFormDraft={formDraft}
+      initialUserInput={formDraft ? stored.userInput : undefined}
       userName={session.user.name ?? session.user.email}
     />
   )

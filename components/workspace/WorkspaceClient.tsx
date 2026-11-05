@@ -7,7 +7,7 @@ import ModuleCard, { type ProjectModuleWithMeta } from './ModuleCard'
 import IRBFormDraftPanel from './IRBFormDraftPanel'
 import NetworkSyncProvider from './NetworkSyncProvider'
 import RejectionPanel, { type RejectionNote } from './RejectionPanel'
-import type { IRBFormDraftResult } from '@/lib/irb/types'
+import type { IRBFormDraftResult, IRBUserInput } from '@/lib/irb/types'
 
 const SESSION_KEY_DRAFT = 'irb_form_draft_output'
 const SESSION_KEY_INCOMPLETE = 'irb_incomplete_keys'
@@ -20,6 +20,8 @@ interface WorkspaceClientProps {
   rejectionNotes: RejectionNote[]
   sourceSummary?: string | null
   initialFormDraft?: IRBFormDraftResult
+  /** 이전에 입력했던 정보 (돌아왔을 때 폼을 채워서 보여줌) */
+  initialUserInput?: IRBUserInput
   userName?: string | null
 }
 
@@ -30,6 +32,7 @@ export default function WorkspaceClient({
   modules,
   rejectionNotes: initialRejectionNotes,
   initialFormDraft,
+  initialUserInput,
   userName,
 }: WorkspaceClientProps) {
   const [bulkContents, setBulkContents] = useState<Record<string, string>>({})
@@ -133,6 +136,7 @@ export default function WorkspaceClient({
             </p>
             <IRBFormDraftPanel
               initialFormDraft={initialFormDraft}
+              initialUserInput={initialUserInput}
               embedded
               onDraftComplete={handleDraftComplete}
               incompleteQuestions={incompleteQuestions}

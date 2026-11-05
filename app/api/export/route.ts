@@ -5,17 +5,16 @@ import { prisma } from '@/lib/prisma'
 import { generateDocx } from '@/lib/export/generateDocx'
 import { generatePdf } from '@/lib/export/generatePdf'
 import { fillHwpx } from '@/lib/export/fillHwpx'
-import type { IRBFormDraftOutput } from '@/lib/irb/types'
+import { parseStoredDraft } from '@/lib/irb/draftStore'
 import JSZip from 'jszip'
 
-async function exportHwpx(projectId: string, projectName: string, formDraftJson: string | null) {
-  let output: IRBFormDraftOutput | null = null
-  try {
-    const parsed = formDraftJson ? JSON.parse(formDraftJson) : null
-    if (Array.isArray(parsed?.sections)) output = parsed as IRBFormDraftOutput
-  } catch {
-    output = null
-  }
+async function exportHwpx(
+  projectId: string,
+  projectName: string,
+  cols: { formDraftJson: string | null; draftOutputJson: string | null; userInputJson: string | null },
+) {
+  // 새 컬럼(draftOutputJson) 우선, 예전 프로젝트는 formDraftJson 의 legacy 형태도 읽는다
+  const output = parseStoredDraft(cols).output
   if (!output) {
     return NextResponse.json(
       { error: 'Unprocessable', message: '작성된 초안이 없습니다. 먼저 문항별 초안을 생성해 주세요.' },
@@ -125,7 +124,7 @@ export async function POST(req: NextRequest) {
 
   // ── HWPX: 업로드한 기관 양식에 초안 답변을 채워서 내보낸다 ─────────
   if (format === 'hwpx') {
-    return exportHwpx(project.id, project.name, project.formDraftJson)
+    return exportHwpx(project.id, project.name, project)
   }
 
   const exportProject = {

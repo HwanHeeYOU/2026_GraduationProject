@@ -62,7 +62,12 @@ model Project {
   institutionId String
   status        String          @default("DRAFT")
   sourceSummary String?
+  /// 문항 구조(IRBFormDraftResult: questions + fileSections). 초안 생성 후에도 덮어쓰지 않는다.
   formDraftJson String?
+  /// 생성된 초안(IRBFormDraftOutput: sections + rawText)
+  draftOutputJson String?
+  /// 사용자가 입력한 원본 정보 { userAnswers, naturalLanguageInput } — 재생성/보완 시 근거 자료
+  userInputJson String?
   createdAt     DateTime        @default(now())
   updatedAt     DateTime        @updatedAt
   modules       ProjectModule[]

@@ -3,7 +3,7 @@ import { redirect, notFound } from 'next/navigation'
 import { authOptions } from '@/lib/auth'
 import { prisma } from '@/lib/prisma'
 import ReviewClient from '@/components/review/ReviewClient'
-import type { IRBFormDraftOutput } from '@/lib/irb/types'
+import { parseStoredDraft } from '@/lib/irb/draftStore'
 
 interface ReviewPageProps {
   params: { id: string }
@@ -22,6 +22,8 @@ export default async function ReviewPage({ params }: ReviewPageProps) {
       id: true,
       name: true,
       formDraftJson: true,
+      draftOutputJson: true,
+      userInputJson: true,
       institution: { select: { name: true } },
     },
   })
@@ -30,26 +32,16 @@ export default async function ReviewPage({ params }: ReviewPageProps) {
     notFound()
   }
 
-  // DB에 저장된 최신 초안 로드 (있으면 전달 → 클라이언트 sessionStorage보다 우선)
-  let savedOutput: IRBFormDraftOutput | null = null
-  if (project.formDraftJson) {
-    try {
-      const parsed = JSON.parse(project.formDraftJson)
-      // IRBFormDraftOutput 형태인지 확인 (sections 배열이 있으면 output, 없으면 구버전 result)
-      if (Array.isArray(parsed?.sections)) {
-        savedOutput = parsed as IRBFormDraftOutput
-      }
-    } catch {
-      savedOutput = null
-    }
-  }
+  // DB에 저장된 최신 초안/문항 구조 로드 (예전 프로젝트는 legacy 형태도 읽음)
+  const stored = parseStoredDraft(project)
 
   return (
     <ReviewClient
       projectId={project.id}
       projectName={project.name}
       institutionName={project.institution.name}
-      savedOutput={savedOutput}
+      savedOutput={stored.output}
+      structure={stored.effectiveStructure}
       userName={session.user.name ?? session.user.email}
     />
   )
