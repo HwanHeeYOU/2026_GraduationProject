@@ -196,8 +196,17 @@ export default function NewProjectWizard() {
         const data = await res.json()
         throw new Error((data as { message?: string }).message ?? '프로젝트 생성에 실패했습니다.')
       }
-      const project = await res.json()
-      window.location.href = `/projects/${(project as { id: string }).id}/workspace`
+      const project = (await res.json()) as { id: string }
+
+      // 업로드한 HWPX 원본 양식 보관 (내보내기 때 이 양식에 답변을 채워 넣음)
+      const hwpxFiles = uploadedFiles.filter((f) => f.name.toLowerCase().endsWith('.hwpx'))
+      if (hwpxFiles.length > 0) {
+        const fd = new FormData()
+        hwpxFiles.forEach((f) => fd.append('file', f))
+        await fetch(`/api/projects/${project.id}/templates`, { method: 'POST', body: fd }).catch(() => {})
+      }
+
+      window.location.href = `/projects/${project.id}/workspace`
     } catch (e) {
       setSubmitError(e instanceof Error ? e.message : '프로젝트 생성에 실패했습니다. 다시 시도해 주세요.')
     } finally {

@@ -16,6 +16,7 @@
     "@anthropic-ai/sdk": "^0.27.0",
     "@hwp.js/parser": "^0.0.4-alpha.0",
     "@prisma/client": "^5.16.1",
+    "@xmldom/xmldom": "^0.8.15",
     "bcryptjs": "^2.4.3",
     "clsx": "^2.1.1",
     "docx": "^8.5.0",

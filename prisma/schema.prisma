@@ -67,6 +67,19 @@ model Project {
   updatedAt     DateTime        @updatedAt
   modules       ProjectModule[]
   rejectionNotes RejectionNote[]
+  templateFiles ProjectTemplateFile[]
+}
+
+/// 사용자가 업로드한 기관 양식 원본(HWPX). 내보내기 시 이 양식에 답변을 채워 넣는다.
+model ProjectTemplateFile {
+  id        String   @id @default(cuid())
+  project   Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  projectId String
+  fileName  String
+  data      Bytes
+  createdAt DateTime @default(now())
+
+  @@unique([projectId, fileName])
 }
 
 model ProjectModule {
