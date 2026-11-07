@@ -39,9 +39,11 @@ interface IRBFormDraftPanelProps {
   projectId?: string
   /** 이전에 입력했던 정보 — 저장된 서식을 그대로 쓸 때만 폼에 미리 채운다 */
   initialUserInput?: IRBUserInput
+  /** 생성 요청 직전에 호출 — 서버가 DB 에서 읽는 모듈 카드 내용이 최신이도록 저장 */
+  beforeGenerate?: () => Promise<void>
 }
 
-export default function IRBFormDraftPanel({ initialFormDraft, embedded, onDraftComplete, incompleteQuestions = [], projectId, initialUserInput }: IRBFormDraftPanelProps) {
+export default function IRBFormDraftPanel({ initialFormDraft, embedded, onDraftComplete, incompleteQuestions = [], projectId, initialUserInput, beforeGenerate }: IRBFormDraftPanelProps) {
   // fileSections가 없거나 비어있으면 저장된 서식 없음으로 처리 (방어적 코드)
   const hasStoredForm = !!initialFormDraft &&
     Array.isArray(initialFormDraft.fileSections) &&
@@ -158,6 +160,8 @@ export default function IRBFormDraftPanel({ initialFormDraft, embedded, onDraftC
     setIsGenerating(true)
     setPhase({ status: 'generating' })
     try {
+      // 저장 전인 모듈 카드 입력이 있어도 서버가 최신 내용을 읽도록 먼저 저장
+      if (beforeGenerate) await beforeGenerate().catch(() => {})
       const res = await fetch('/api/ai/irb-form-draft', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },

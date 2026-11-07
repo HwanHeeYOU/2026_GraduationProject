@@ -9,6 +9,8 @@ import type { ModuleRecommendation, NewModuleSuggestion } from '@/lib/irb/types'
 export const maxDuration = 60
 
 const MAX_FILE_SIZE = 10 * 1024 * 1024 // 10MB
+// AI에 넘길 문서 텍스트 상한 (긴 문서의 뒷부분 표·문항까지 분석에 포함)
+const MAX_DOC_CHARS = 60000
 
 async function extractDocxText(buffer: Buffer): Promise<string | null> {
   try {
@@ -150,7 +152,7 @@ function buildTextPrompt(
 아래 문서를 분석하여, 제공된 IRB 모듈 목록 중 이 양식·가이드라인에서 필요로 하는 항목을 판단해주세요.
 
 === 문서 내용 ===
-${documentText.slice(0, 8000)}
+${documentText.slice(0, MAX_DOC_CHARS)}
 
 ${buildInstruction(moduleList)}`
 }
@@ -164,7 +166,7 @@ function buildPdfInstruction(
     .join('\n')
 
   const extraSection = extraText
-    ? `\n=== 추가로 첨부된 문서 내용 ===\n${extraText.slice(0, 8000)}\n`
+    ? `\n=== 추가로 첨부된 문서 내용 ===\n${extraText.slice(0, MAX_DOC_CHARS)}\n`
     : ''
 
   return `당신은 IRB(기관생명윤리위원회) 심의 서류 분석 전문가입니다.

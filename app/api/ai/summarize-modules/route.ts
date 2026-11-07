@@ -3,7 +3,10 @@ import { getServerSession } from 'next-auth'
 import { authOptions } from '@/lib/auth'
 import { generateText } from '@/lib/ai-client'
 
-export const maxDuration = 30
+export const maxDuration = 60
+
+// AI에 넘길 모듈 내용 상한 (긴 내용도 요약에 온전히 반영)
+const MAX_INPUT_CHARS = 60000
 
 interface SummarizeRequest {
   modules: { name: string; content: string }[]
@@ -38,7 +41,7 @@ export async function POST(req: NextRequest) {
   const prompt = `아래는 연구자가 IRB 서류 각 항목에 직접 작성한 내용입니다. 이 내용을 바탕으로, IRB 서류 자동 초안 생성에 활용할 수 있는 연구 설명문을 작성해주세요.
 
 작성된 IRB 항목 내용:
-${moduleText.slice(0, 8000)}
+${moduleText.slice(0, MAX_INPUT_CHARS)}
 
 요구사항:
 - 연구자가 작성한 모든 정보를 최대한 포함하세요
@@ -49,7 +52,7 @@ ${moduleText.slice(0, 8000)}
   try {
     const summary = await generateText({
       messages: [{ role: 'user', content: prompt }],
-      maxTokens: 1500,
+      maxTokens: 3000,
     })
     return NextResponse.json({ summary })
   } catch (e) {

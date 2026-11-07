@@ -14,8 +14,31 @@ import {
   applyAnswers,
   buildRawText,
 } from '@/lib/irb/draftStore'
+import { buildProjectContext } from '@/lib/irb/projectContext'
 
 export const maxDuration = 120
+
+/** DB 에서 프로젝트의 문서 요약본 + 모듈 카드 내용을 읽어 프롬프트용 컨텍스트 문자열로 만든다. */
+async function loadProjectContext(projectId: string | undefined, userId: string): Promise<string> {
+  if (!projectId) return ''
+  try {
+    const project = await prisma.project.findFirst({
+      where: { id: projectId, userId },
+      select: {
+        sourceSummary: true,
+        modules: {
+          select: { content: true, module: { select: { name: true } } },
+          orderBy: { order: 'asc' },
+        },
+      },
+    })
+    return buildProjectContext(project)
+  } catch (e) {
+    // 컨텍스트 조회 실패가 초안 생성을 막지 않도록 — 로그만
+    console.warn('[irb-form-draft] project context load failed:', e)
+    return ''
+  }
+}
 
 const MAX_FILE_SIZE = 10 * 1024 * 1024
 
@@ -75,18 +98,74 @@ async function extractText(name: string, buffer: Buffer): Promise<string | null>
 }
 
 // ── Phase 1-A: 파일 하나에서 raw 문항 추출 ───────────────────
-function buildRawExtractionPrompt(fileName: string, text: string): string {
+// 문서를 앞부분만 자르지 않고 줄 단위 청크로 나눠 전부 분석한다.
+const RAW_CHUNK_SIZE = 15000      // 청크 하나의 최대 글자 수
+const RAW_CHUNK_OVERLAP = 1000    // 청크 경계에서 표 헤더가 끊기지 않도록 겹치는 글자 수
+const RAW_MAX_TOTAL = 300000      // 파일 하나당 분석 상한 (비정상적으로 큰 입력 방어)
+const RAW_CONCURRENCY = 3         // 동시에 보낼 AI 요청 수
+
+function splitIntoChunks(text: string): string[] {
+  const src = text.length > RAW_MAX_TOTAL ? text.slice(0, RAW_MAX_TOTAL) : text
+  if (src.length <= RAW_CHUNK_SIZE) return [src]
+  const lines = src.split('\n')
+  const chunks: string[] = []
+  let cur: string[] = []
+  let len = 0
+  for (const line of lines) {
+    if (len + line.length + 1 > RAW_CHUNK_SIZE && cur.length > 0) {
+      chunks.push(cur.join('\n'))
+      // 끝부분 일부를 다음 청크 앞에 다시 붙인다 (표 헤더/문맥 유지)
+      const tail: string[] = []
+      let tailLen = 0
+      for (let i = cur.length - 1; i >= 0 && tailLen < RAW_CHUNK_OVERLAP; i--) {
+        tail.unshift(cur[i])
+        tailLen += cur[i].length + 1
+      }
+      cur = tail
+      len = tailLen
+    }
+    // 줄 하나가 청크보다 길면 강제로 분할
+    if (line.length > RAW_CHUNK_SIZE) {
+      for (let i = 0; i < line.length; i += RAW_CHUNK_SIZE) {
+        chunks.push(line.slice(i, i + RAW_CHUNK_SIZE))
+      }
+      cur = []
+      len = 0
+      continue
+    }
+    cur.push(line)
+    len += line.length + 1
+  }
+  if (cur.length > 0) chunks.push(cur.join('\n'))
+  return chunks
+}
+
+function buildRawExtractionPrompt(fileName: string, text: string, part = 1, total = 1): string {
+  const partNote = total > 1
+    ? `\n※ 이 파일은 길어서 ${total}개 구간으로 나눠 분석합니다. 지금은 ${part}/${total} 구간입니다. 이 구간에 있는 문항만 추출하세요. (구간 앞부분은 이전 구간과 일부 겹칠 수 있습니다)\n`
+    : ''
   return `당신은 IRB(기관생명윤리위원회) 서류 분석 전문가입니다.
 아래 IRB 서류/양식 파일을 정밀하게 분석하여, 사용자가 실제로 작성·입력해야 할 모든 문항을 누락 없이 추출하세요.
-
+${partNote}
 === 파일: ${fileName} ===
-${text.slice(0, 8000)}
+${text}
 
 추출 규칙:
 - 빈칸, 입력란, 서술 요청, 체크박스 항목 등 사용자가 채워야 할 모든 항목 포함
 - 섹션 제목이나 안내문(작성 방법 설명)은 제외
 - 표 형태의 양식도 각 셀의 입력 항목을 문항으로 추출
 - 문항 텍스트는 원본 언어 그대로 유지 (한국어라면 한국어로)
+
+★★ 여러 행을 입력하는 표(Table) 문항 — 절대 생략 금지 ★★
+- "필요시 칸을 추가하여 기재하십시오", "행을 추가하여 작성" 등과 같이 여러 줄을 반복해서 입력해야 하는 표를 절대 생략하지 마세요.
+  예: 이력서의 근무 경력, 연구 경력, 교육이수이력, 연구 참여 이력, 자격·면허 사항 등
+- 이런 표는 표의 헤더(예: 기간, 소속, 직위, 연구 제목, 교육명, 이수일 등)를 파악하여,
+  하나의 문항으로 추출하되 문항 텍스트에 표 이름과 열 이름을 모두 포함하세요.
+  형식: "표 이름 (열1 / 열2 / 열3 …) - 여러 건 입력"
+  예: "근무 경력 (기간 / 소속 / 직위 / 담당업무) - 여러 건 입력"
+  예: "교육이수이력 (교육명 / 이수일 / 교육기관 / 시간) - 여러 건 입력"
+- 사용자가 여러 개의 항목(행)을 배열처럼 반복해서 입력할 수 있어야 하므로, 헤더 열 이름을 절대 빠뜨리거나 한 줄로 뭉뚱그려 생략하지 마세요.
+- 빈 행이 여러 개 있어도 행마다 별도 문항으로 만들지 말고, 표 하나당 문항 하나로 추출하세요.
 
 반드시 아래 JSON 형식으로만 응답하세요. 다른 텍스트나 마크다운 없이 순수 JSON만:
 {
@@ -120,6 +199,7 @@ ${filesSummary}
 - 통합 문항의 label은 가장 포괄적이고 명확한 표현을 사용
 - 완전히 다른 내용을 묻는 문항은 각각 별도 항목으로 유지
 - 각 통합 문항이 원본에서 어떤 표현들을 합쳤는지 variants에 모두 기록
+- "(열1 / 열2 …) - 여러 건 입력" 형태의 여러 행 표 문항(근무 경력, 연구 경력, 교육이수이력 등)은 절대 삭제하거나 다른 문항에 흡수하지 말고, 열 이름을 유지한 채 별도 항목으로 두며 multiline을 true로 설정
 
 출력 후 각 원본 파일의 각 문항이 통합 목록의 어떤 key에 해당하는지 매핑도 제공하세요.
 
@@ -159,7 +239,8 @@ function buildMappingPrompt(
   chunkItems: { question: string; answerKey: string }[],
   mergedQuestions: IRBFormQuestion[],
   userAnswers: IRBUserAnswers,
-  naturalLanguageInput: string
+  naturalLanguageInput: string,
+  projectContext = '',
 ): string {
   // 이 청크에 직접 답변이 있는 항목
   const directAnswers = chunkItems
@@ -186,7 +267,21 @@ function buildMappingPrompt(
     })
     .join('\n')
 
-  return `[시스템 지침 — 절대 준수]
+  const contextBlock = projectContext
+    ? `=== [프로젝트 컨텍스트 — 최우선 사실(Ground Truth)] ===
+${projectContext}
+=== [프로젝트 컨텍스트 끝] ===
+
+★★ 최우선 규칙 — Ground Truth ★★
+- 위 "프로젝트 컨텍스트"(문서 분석 요약본, 사용자가 모듈 카드에 직접 작성한 내용)는 사용자가 제공한 확정 사실입니다. 모든 문항의 답변은 이 내용을 가장 먼저, 최우선 근거로 삼아 작성하세요.
+- 컨텍스트에 있는 정보(연구 제목, 대상자, 방법, 기간, 책임자, 소속 등)는 반드시 해당 문항에 반영하고, 이와 모순되는 내용을 만들어내지 마세요.
+- 컨텍스트에 없는 사실을 임의로 지어내지 마세요. 컨텍스트와 아래 입력 어디에도 근거가 없을 때만 ${MISSING_MARKER}를 사용하세요.
+- 컨텍스트는 아래 직접 입력값/자연어 설명을 보완하는 근거입니다. 같은 항목이 서로 다르면 "직접 입력값"이 가장 우선입니다.
+
+`
+    : ''
+
+  return `${contextBlock}[시스템 지침 — 절대 준수]
 당신은 IRB 서류 작성 전문가입니다.
 
 ★★ 핵심 규칙 (우선순위 순) ★★
@@ -211,6 +306,8 @@ ${naturalLanguageInput.slice(0, 4000)}
 ${questionList}
 
 출력 규칙:
+- "(열1 / 열2 …) - 여러 건 입력" 형태의 표 문항은 입력된 정보에서 여러 건을 찾아 한 건당 한 줄로, 열 순서대로 " / "로 구분하여 작성 (예: "2020.03~2023.02 / ○○병원 / 전임의 / 임상연구")
+  각 줄 앞에 번호를 붙이지 말고, 정보가 일부만 있어도 있는 건만 작성. 건이 하나도 없을 때만 ${MISSING_MARKER}
 - 마크다운, 인사말, 설명 없이 아래 형식만 출력
 - 반드시 ${chunkItems.length}개 문항 전부, 순서대로 출력
 - [문항] 뒤에는 원본 문항 텍스트를 그대로 복사 (절대 요약하거나 변경하지 말 것)
@@ -354,16 +451,17 @@ async function generateItemAnswers(
   mergedQuestions: IRBFormQuestion[],
   userAnswers: IRBUserAnswers,
   naturalLanguageInput: string,
+  projectContext = '',
 ): Promise<{ question: string; answer: string }[]> {
   const collected: { question: string; answer: string }[] = []
 
   // 문항을 CHUNK_SIZE 단위로 나눠 처리
   for (let start = 0; start < items.length; start += CHUNK_SIZE) {
     const chunk = items.slice(start, start + CHUNK_SIZE)
-    const prompt = buildMappingPrompt(fileName, chunk, mergedQuestions, userAnswers, naturalLanguageInput)
+    const prompt = buildMappingPrompt(fileName, chunk, mergedQuestions, userAnswers, naturalLanguageInput, projectContext)
     const raw = await generateText({
       messages: [{ role: 'user', content: prompt }],
-      maxTokens: 2500,
+      maxTokens: 4000,
     })
     const parsed = parseFileOutput(raw)
 
@@ -464,24 +562,42 @@ export async function POST(req: NextRequest) {
       // Phase 1-A: 파일별 raw 문항 추출 (순차 처리)
       const perFileRaw: { fileName: string; questions: string[] }[] = []
       for (const f of extracted) {
-        const raw = await generateText({
-          messages: [{ role: 'user', content: buildRawExtractionPrompt(f.name, f.text) }],
-          maxTokens: 2000,
-        })
-        const jsonMatch = raw.match(/\{[\s\S]*\}/)
-        if (!jsonMatch) {
-          perFileRaw.push({ fileName: f.name, questions: [] })
-          continue
+        // 전체 텍스트를 청크로 나눠 모두 분석 (앞부분만 자르지 않음)
+        const chunks = splitIntoChunks(f.text)
+        console.log(`[irb-form-draft] ${f.name}: ${f.text.length} chars → ${chunks.length} chunk(s)`)
+
+        const chunkQuestions: string[][] = new Array(chunks.length).fill(null).map(() => [])
+        for (let s = 0; s < chunks.length; s += RAW_CONCURRENCY) {
+          await Promise.all(
+            chunks.slice(s, s + RAW_CONCURRENCY).map(async (chunk, k) => {
+              const idx = s + k
+              try {
+                const raw = await generateText({
+                  messages: [{ role: 'user', content: buildRawExtractionPrompt(f.name, chunk, idx + 1, chunks.length) }],
+                  maxTokens: 4000,
+                })
+                const jsonMatch = raw.match(/\{[\s\S]*\}/)
+                if (!jsonMatch) return
+                const parsed = JSON.parse(jsonMatch[0]) as { items?: { question: string }[] }
+                chunkQuestions[idx] = (parsed.items ?? []).map((i) => i.question).filter(Boolean)
+              } catch (e) {
+                // 한 구간 실패가 파일 전체를 막지 않도록 — 해당 구간만 건너뜀
+                console.warn(`[irb-form-draft] chunk ${idx + 1}/${chunks.length} failed for ${f.name}:`, e)
+              }
+            })
+          )
         }
-        try {
-          const parsed = JSON.parse(jsonMatch[0]) as { items?: { question: string }[] }
-          perFileRaw.push({
-            fileName: f.name,
-            questions: (parsed.items ?? []).map((i) => i.question).filter(Boolean),
-          })
-        } catch {
-          perFileRaw.push({ fileName: f.name, questions: [] })
+
+        // 구간 순서대로 합치되, 겹치는 구간에서 생긴 동일 문항은 제거
+        const seen = new Set<string>()
+        const questions: string[] = []
+        for (const q of chunkQuestions.flat()) {
+          const k = q.replace(/\s+/g, '').toLowerCase()
+          if (seen.has(k)) continue
+          seen.add(k)
+          questions.push(q)
         }
+        perFileRaw.push({ fileName: f.name, questions })
       }
 
       const totalQuestions = perFileRaw.reduce((s, f) => s + f.questions.length, 0)
@@ -494,7 +610,7 @@ export async function POST(req: NextRequest) {
         // LLM 의미 기반 중복 통합
         const dedupeRaw = await generateText({
           messages: [{ role: 'user', content: buildDeduplicationPrompt(perFileRaw) }],
-          maxTokens: 4000,
+          maxTokens: 8000,
         })
 
         const jsonMatch = dedupeRaw.match(/\{[\s\S]*\}/)
@@ -565,9 +681,13 @@ export async function POST(req: NextRequest) {
     if (!mergedQuestions?.length) {
       return NextResponse.json({ error: 'BadRequest', message: 'mergedQuestions가 필요합니다.' }, { status: 400 })
     }
-    // 개별 답변과 자연어 입력 중 하나는 있어야 함
+    // 문서 요약본 + 모듈 카드 내용 → 모든 문항 생성 프롬프트 최상단에 주입
+    const projectContext = await loadProjectContext(body.projectId, session.user.id)
+
+    // 개별 답변, 자연어 입력, 프로젝트 컨텍스트(요약본/모듈 내용) 중 하나는 있어야 함
     const hasAnyInput =
       naturalLanguageInput?.trim() ||
+      projectContext ||
       Object.values(userAnswers ?? {}).some((v) => v?.trim())
     if (!hasAnyInput) {
       return NextResponse.json({
@@ -586,6 +706,7 @@ export async function POST(req: NextRequest) {
           mergedQuestions,
           userAnswers ?? {},
           naturalLanguageInput ?? '',
+          projectContext,
         )
 
         // 원본 문항 순서 보장
@@ -660,7 +781,17 @@ export async function PATCH(req: NextRequest) {
 
   const project = await prisma.project.findFirst({
     where: { id: body.projectId, userId: session.user.id },
-    select: { id: true, formDraftJson: true, draftOutputJson: true, userInputJson: true },
+    select: {
+      id: true,
+      formDraftJson: true,
+      draftOutputJson: true,
+      userInputJson: true,
+      sourceSummary: true,
+      modules: {
+        select: { content: true, module: { select: { name: true } } },
+        orderBy: { order: 'asc' },
+      },
+    },
   })
   if (!project) {
     return NextResponse.json({ error: 'NotFound', message: '프로젝트를 찾을 수 없습니다.' }, { status: 404 })
@@ -676,11 +807,13 @@ export async function PATCH(req: NextRequest) {
     const userAnswers = mergeSupplements(stored.userInput.userAnswers, supplements)
     const naturalLanguageInput = stored.userInput.naturalLanguageInput
 
+    const projectContext = buildProjectContext(project)
+
     const targets = findPatchTargets(stored.output, structure, supplements.map((s) => s.answerKey))
 
     const updates: Array<{ fileName: string; question: string; answer: string }> = []
     for (const t of targets) {
-      const answers = await generateItemAnswers(t.fileName, t.items, structure.questions, userAnswers, naturalLanguageInput)
+      const answers = await generateItemAnswers(t.fileName, t.items, structure.questions, userAnswers, naturalLanguageInput, projectContext)
       for (const a of answers) updates.push({ fileName: t.fileName, question: a.question, answer: a.answer })
     }
 

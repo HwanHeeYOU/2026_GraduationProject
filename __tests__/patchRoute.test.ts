@@ -194,3 +194,69 @@ describe('POST /api/ai/irb-form-draft (생성 후 저장)', () => {
     })
   })
 })
+
+describe('프로젝트 컨텍스트 (sourceSummary + 모듈 카드 내용) 프롬프트 주입', () => {
+  const ctxProject = {
+    sourceSummary: '요약본: 당뇨 환자 AI 진단 연구',
+    modules: [
+      { content: '대상자는 성인 300명', module: { name: '연구 대상자' } },
+      { content: '   ', module: { name: '빈 모듈' } },
+    ],
+  }
+
+  it('POST: 요약본과 모듈 내용이 프롬프트 최상단에 들어가고 Ground Truth 규칙이 포함된다', async () => {
+    state.project = { ...ctxProject }
+    generateText.mockResolvedValue('[파일: A.hwpx]\n[문항] 연구 제목\n[답변] 제목')
+    const body = {
+      projectId: 'p1',
+      fileSections: [structure.fileSections[0]],
+      mergedQuestions: structure.questions,
+      userAnswers: { q_0: '제목' },
+      naturalLanguageInput: '',
+    }
+    const res = await POST({
+      json: async () => body,
+      headers: new Headers({ 'content-type': 'application/json' }),
+    } as unknown as Parameters<typeof POST>[0])
+    expect(res.status).toBe(200)
+    const prompt = generateText.mock.calls[0][0].messages[0].content as string
+    expect(prompt.startsWith('=== [프로젝트 컨텍스트')).toBe(true)
+    expect(prompt).toContain('요약본: 당뇨 환자 AI 진단 연구')
+    expect(prompt).toContain('■ 연구 대상자\n대상자는 성인 300명')
+    expect(prompt).not.toContain('빈 모듈')
+    expect(prompt).toContain('Ground Truth')
+  })
+
+  it('POST: 다른 입력이 없어도 컨텍스트가 있으면 생성할 수 있다', async () => {
+    state.project = { ...ctxProject }
+    generateText.mockResolvedValue('[파일: A.hwpx]\n[문항] 연구 제목\n[답변] 제목')
+    const body = {
+      projectId: 'p1',
+      fileSections: [structure.fileSections[0]],
+      mergedQuestions: structure.questions,
+      userAnswers: {},
+      naturalLanguageInput: '',
+    }
+    const res = await POST({
+      json: async () => body,
+      headers: new Headers({ 'content-type': 'application/json' }),
+    } as unknown as Parameters<typeof POST>[0])
+    expect(res.status).toBe(200)
+  })
+
+  it('PATCH: 보완 재생성에도 컨텍스트가 전달된다', async () => {
+    state.project = { ...(state.project ?? {}), ...ctxProject }
+    state.project = {
+      id: 'p1',
+      formDraftJson: JSON.stringify(structure),
+      draftOutputJson: JSON.stringify(output),
+      userInputJson: null,
+      ...ctxProject,
+    }
+    generateText.mockResolvedValue('죄송합니다')
+    await PATCH(req({ projectId: 'p1', supplements: [{ answerKey: 'q_2', supplement: '목적' }] }))
+    const prompt = generateText.mock.calls[0][0].messages[0].content as string
+    expect(prompt).toContain('요약본: 당뇨 환자 AI 진단 연구')
+    expect(prompt).toContain('대상자는 성인 300명')
+  })
+})

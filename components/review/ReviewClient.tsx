@@ -6,6 +6,7 @@ import {
   AlertTriangle, CheckCircle2, FileText, Loader2, PenLine, Pencil,
 } from 'lucide-react'
 import DashboardLayout from '@/components/dashboard/DashboardLayout'
+import ExportButton from '@/components/review/ExportButton'
 import type { IRBFormDraftOutput, IRBFormDraftResult } from '@/lib/irb/types'
 import { groupMissing, isMissing, MISSING_MARKER } from '@/lib/irb/draftStore'
 
@@ -452,6 +453,18 @@ export default function ReviewClient({
                 </div>
               )
             })}
+
+            {/* 문서 내보내기 (HWPX / DOCX / PDF) */}
+            <div className="glass-card p-5 space-y-3">
+              <h2 className="text-sm font-semibold text-white flex items-center gap-1.5">
+                <FileText size={13} className="text-blue-300" /> 문서 내보내기
+              </h2>
+              <ExportButton
+                projectId={projectId}
+                projectName={projectName}
+                hasIncomplete={totalMissing > 0}
+              />
+            </div>
 
             {/* 하단 전체 복사 */}
             <div className="flex justify-center pt-2 pb-6">

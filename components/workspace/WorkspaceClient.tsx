@@ -79,6 +79,11 @@ export default function WorkspaceClient({
     }
   }, [])
 
+  // 초안 생성 전 모든 모듈 카드 내용을 DB 에 저장 (서버가 이 내용을 AI 프롬프트에 사용)
+  const flushAllModules = useCallback(async () => {
+    await Promise.all(Array.from(flushRegistry.current.values()).map((fn) => fn()))
+  }, [])
+
   // IRB 초안 생성 완료 → sessionStorage 저장 후 /review로 이동
   const handleDraftComplete = useCallback(async (rawText: string, sectionsJson: string) => {
     setNavigating(true)
@@ -139,6 +144,7 @@ export default function WorkspaceClient({
               initialUserInput={initialUserInput}
               embedded
               onDraftComplete={handleDraftComplete}
+              beforeGenerate={flushAllModules}
               incompleteQuestions={incompleteQuestions}
               projectId={projectId}
             />
