@@ -104,7 +104,7 @@ export default function IRBFormDraftPanel({ initialFormDraft, embedded, onDraftC
       setPhase({ status: 'form', draft })
       // 내보내기 때 양식에 답변을 채워 넣을 수 있도록 원본 HWPX 보관
       if (projectId) {
-        const hwpx = files.filter((f) => f.name.toLowerCase().endsWith('.hwpx'))
+        const hwpx = files.filter((f) => /\.hwpx?$/i.test(f.name))
         if (hwpx.length > 0) {
           const fd = new FormData()
           hwpx.forEach((f) => fd.append('file', f))

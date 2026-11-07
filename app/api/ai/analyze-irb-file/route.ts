@@ -30,37 +30,8 @@ async function extractDocxText(buffer: Buffer): Promise<string | null> {
 
 async function extractHwpText(buffer: Buffer): Promise<string | null> {
   try {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const { parse, TableControl } = await import('@hwp.js/parser') as any
-
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const collectParagraphText = (paragraphs: any): string[] => {
-      const lines: string[] = []
-      for (const paragraph of Array.from(paragraphs) as any[]) {
-        let line = ''
-        for (const char of paragraph.chars) line += char.toString()
-        line = line.trim()
-        if (line) lines.push(line)
-
-        for (const control of paragraph.controls ?? []) {
-          if (control instanceof TableControl) {
-            for (const cell of control.cells) {
-              lines.push(...collectParagraphText(cell.paragraphs))
-            }
-          }
-        }
-      }
-      return lines
-    }
-
-    const document = parse(buffer)
-    const lines: string[] = []
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    for (const section of document.sections as any[]) {
-      lines.push(...collectParagraphText(section.paragraphs))
-    }
-
-    const result = lines.join('\n').trim()
+    const { parseHwpStructure, structureToText } = await import('@/lib/hwp/hwpToHwpx')
+    const result = structureToText(await parseHwpStructure(buffer))
     if (!result) {
       console.warn('[extractHwpText] parsed but got empty text — HWP version may be unsupported')
       return null

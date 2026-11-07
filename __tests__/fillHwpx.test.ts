@@ -246,4 +246,53 @@ describe('fillHwpx', () => {
     const buf = await zip.generateAsync({ type: 'nodebuffer' })
     await expect(fillHwpx(buf, [])).rejects.toThrow('section')
   })
+
+  it('문구가 다소 달라도(완화 매칭) 양식 칸에 채운다', async () => {
+    const tpl = await makeHwpx(tbl(tr(cell(0, 0, '연구대상자 선정 기준 및 제외 기준'), cell(1, 0, ''))))
+    const r = await fillHwpx(tpl, [{ question: '연구대상자 선정기준', answer: '만 19세 이상 성인' }])
+    const { texts } = await readSection(r.buffer)
+    expect(texts).toEqual(['연구대상자 선정 기준 및 제외 기준', '만 19세 이상 성인'])
+    expect(r.unmatched).toEqual([])
+  })
+})
+
+describe('fillHwpx - 열 머리글이 있는 여러 건 입력 표', () => {
+  const header = tr(cell(0, 0, '구분'), cell(1, 0, '내역'), cell(2, 0, '예산액'), cell(3, 0, '비고'))
+  const empty = (r: number) => tr(cell(0, r, ''), cell(1, r, ''), cell(2, r, ''), cell(3, r, ''))
+  const Q = '연구비 예산 (구분 / 내역 / 예산액 / 비고) - 여러 건 입력'
+
+  it('한 줄을 4개 열로 쪼개 행마다 넣는다', async () => {
+    const tpl = await makeHwpx(tbl(header, empty(1), empty(2)))
+    const r = await fillHwpx(tpl, [
+      { question: Q, answer: '인건비 / 연구보조원 / 3,000,000원 / 6개월\n재료비 / 설문 인쇄 / 500,000원 / -' },
+    ])
+    const { texts } = await readSection(r.buffer)
+    expect(texts).toEqual([
+      '구분', '내역', '예산액', '비고',
+      '인건비', '연구보조원', '3,000,000원', '6개월',
+      '재료비', '설문 인쇄', '500,000원', '-',
+    ])
+    expect(r.filled).toBe(1)
+    expect(r.unmatched).toEqual([])
+  })
+
+  it('빈 행이 모자라면 행을 복제해 늘린다', async () => {
+    const tpl = await makeHwpx(tbl(header, empty(1)))
+    const r = await fillHwpx(tpl, [
+      { question: Q, answer: 'A / a / 1 / x\nB / b / 2 / y\nC / c / 3 / z' },
+    ])
+    const { texts, xml } = await readSection(r.buffer)
+    expect(texts.slice(4)).toEqual(['A', 'a', '1', 'x', 'B', 'b', '2', 'y', 'C', 'c', '3', 'z'])
+    expect(xml).toContain('rowAddr="3"')
+    expect(r.unmatched).toEqual([])
+  })
+
+  it('합계처럼 이미 채워진 행 앞에서 멈추고 남는 줄은 복제로 넣는다', async () => {
+    const total = tr(cell(0, 2, '합계'), cell(1, 2, ''), cell(2, 2, ''), cell(3, 2, ''))
+    const tpl = await makeHwpx(tbl(header, empty(1), total))
+    const r = await fillHwpx(tpl, [{ question: Q, answer: 'A / a / 1 / x\nB / b / 2 / y' }])
+    const { texts } = await readSection(r.buffer)
+    expect(texts.slice(4, 12)).toEqual(['A', 'a', '1', 'x', 'B', 'b', '2', 'y'])
+    expect(texts[texts.length - 1]).toBe('합계')
+  })
 })

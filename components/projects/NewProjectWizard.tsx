@@ -199,7 +199,7 @@ export default function NewProjectWizard() {
       const project = (await res.json()) as { id: string }
 
       // 업로드한 HWPX 원본 양식 보관 (내보내기 때 이 양식에 답변을 채워 넣음)
-      const hwpxFiles = uploadedFiles.filter((f) => f.name.toLowerCase().endsWith('.hwpx'))
+      const hwpxFiles = uploadedFiles.filter((f) => /\.hwpx?$/i.test(f.name))
       if (hwpxFiles.length > 0) {
         const fd = new FormData()
         hwpxFiles.forEach((f) => fd.append('file', f))

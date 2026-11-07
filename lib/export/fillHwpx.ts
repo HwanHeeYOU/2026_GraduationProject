@@ -35,6 +35,8 @@ export interface HwpxFillResult {
 
 const MISSING_PREFIX = '[작성 필요'
 const MATCH_THRESHOLD = 0.6
+/** 1차 매칭에 실패한 문항을 한 번 더 찾을 때 쓰는 완화된 기준 */
+const RELAXED_THRESHOLD = 0.42
 const SECTION_RE = /^Contents\/section\d+\.xml$/i
 const XML_DECL = '<?xml version="1.0" encoding="UTF-8" standalone="yes" ?>'
 
@@ -294,6 +296,8 @@ function cellParas(tc: Element): Element[] {
 const PLACEHOLDER_ONLY = /^(?:[\s_＿.…·\-()[\]]|\u00a0)*$/
 
 /** 양식의 안내 문구 표식: "*소속 대학 및 학과 기술", "※ …", "예) …" */
+/** 날짜 기입 안내: "    년  월부터", "년  월까지", "년 월 일" — 숫자 없이 단위 글자만 있는 칸 */
+const DATE_PLACEHOLDER = /^[\s _＿.…·\-~()]*(?:(?:년|월|일|부터|까지)[\s _＿.…·\-~()]*)+$/
 const GUIDE_MARK = /^\s*(?:[*＊※]|예\s*[)）:：]|e\.?g\.?\s*[:)])/i
 /** 안내 문구 어미: "~기재하십시오", "~입력 바랍니다" */
 const GUIDE_END = /(?:하십시오|하세요|해\s*주세요|바랍니다|요망|할\s*것)[\s.。]*$/
@@ -362,6 +366,7 @@ function paraIsBlue(p: Element, style: StyleInfo): boolean {
 function classifyPara(p: Element, style: StyleInfo): ParaKind {
   const text = ownText(p).trim()
   if (PLACEHOLDER_ONLY.test(text)) return 'blank'
+  if (DATE_PLACEHOLDER.test(text)) return 'guide'
   if (GUIDE_MARK.test(text) || GUIDE_PAREN.test(text)) return 'guide'
   if (SUBLABEL.test(text)) return 'sublabel'
   if (GUIDE_END.test(text) || paraIsBlue(p, style)) return 'guide'
@@ -433,6 +438,195 @@ function findBelow(grid: TableGrid, origin: GridCell, classify: Classify): Found
   }
 }
 
+// ── 열 머리글이 있는 "여러 건 입력" 표 ─────────────────────────
+interface ColumnSpec {
+  title: string
+  columns: string[]
+}
+
+/** "표 이름 (열1 / 열2 / 열3) - 여러 건 입력" → 표 이름과 열 이름들 */
+function parseColumnSpec(question: string): ColumnSpec | null {
+  const groups = Array.from(question.matchAll(/[(（]([^()（）]*\/[^()（）]*)[)）]/g))
+  if (groups.length === 0) return null
+  const g = groups[groups.length - 1]
+  const columns = g[1].split('/').map((c) => c.trim()).filter(Boolean)
+  if (columns.length < 2) return null
+  return { title: question.slice(0, g.index).trim(), columns }
+}
+
+function cellText(tc: Element): string {
+  return cellParas(tc).map(ownText).join(' ').trim()
+}
+
+/** 표 바로 앞 문단의 글 (표 제목 후보) */
+function textBeforeTable(tbl: Element): string {
+  let el: Node | null = tbl
+  while (el && lname(el) !== 'p') el = el.parentNode
+  for (let prev = el?.previousSibling ?? null; prev; prev = prev.previousSibling) {
+    if (prev.nodeType === 1 && lname(prev) === 'p') {
+      const t = ownText(prev as Element).trim()
+      if (t) return t
+    }
+  }
+  return ''
+}
+
+/** 열 이름 하나에 맞는 머리글 셀 */
+function matchHeaderCell(cells: GridCell[], col: string, taken: Set<GridCell>): GridCell | null {
+  const nc = norm(col)
+  let best: GridCell | null = null
+  let bestScore = 0
+  for (const c of cells) {
+    if (taken.has(c)) continue
+    const nt = norm(cellText(c.tc))
+    if (!nt) continue
+    const sc = similarity(nt, nc)
+    if (sc > bestScore) { bestScore = sc; best = c }
+  }
+  return bestScore >= 0.75 ? best : null
+}
+
+/** 모든 열 이름이 한 행에서 발견되는 머리글 행. cols 는 질문의 열 순서와 같다. */
+function findHeader(tbl: Element, columns: string[]): { row: number; cols: GridCell[] } | null {
+  const grid = buildGrid(tbl)
+  const rows = new Map<number, GridCell[]>()
+  for (const c of grid.cells) {
+    if (!rows.has(c.row)) rows.set(c.row, [])
+    rows.get(c.row)!.push(c)
+  }
+  for (const [row, cells] of Array.from(rows.entries()).sort((a, b) => a[0] - b[0])) {
+    const taken = new Set<GridCell>()
+    const cols: GridCell[] = []
+    for (const col of columns) {
+      const m = matchHeaderCell(cells, col, taken)
+      if (!m) break
+      taken.add(m)
+      cols.push(m)
+    }
+    if (cols.length === columns.length) return { row, cols }
+  }
+  return null
+}
+
+/** 한 줄 → 열 개수에 맞춘 값들. 값이 더 많으면 남는 값은 마지막 열에 합친다. */
+function splitRow(line: string, n: number): string[] {
+  const text = line.replace(/^\s*(?:[-•·○●▪※]|\d{1,2}[.)])\s+/, '').trim()
+  let parts = text.split(/\s+\/\s+/).map((x) => x.trim())
+  if (parts.length !== n) {
+    const loose = text.split('/').map((x) => x.trim())
+    if (loose.length === n) parts = loose
+  }
+  if (parts.length > n) parts = [...parts.slice(0, n - 1), parts.slice(n - 1).join(' / ')]
+  while (parts.length < n) parts.push('')
+  return parts
+}
+
+/** 마지막 빈 행을 복제해 그 뒤에 넣는다. 병합·표·그림이 든 행이면 null. */
+function cloneRowAfter(tbl: Element, tr: Element, row: number): Element | null {
+  for (const tc of childEls(tr, 'tc')) {
+    const sp = childEls(tc, 'cellSpan')[0]
+    if ((intAttr(sp, 'rowSpan') ?? 1) > 1) return null
+    if (descendants(tc, 'tbl').length > 0 || descendants(tc, 'pic').length > 0) return null
+  }
+  const clone = tr.cloneNode(true) as Element
+  for (const tc of childEls(clone, 'tc')) {
+    const addr = childEls(tc, 'cellAddr')[0]
+    if (addr) addr.setAttribute('rowAddr', String(row + 1))
+    const doc = tc.ownerDocument!
+    for (const p of cellParas(tc)) {
+      for (const t of ownTs(p)) setTText(doc, t, '')
+      dropLineSegs(p)
+    }
+  }
+  // 뒤따르는 행들의 행 번호를 하나씩 민다
+  for (const tc of descendants(tbl, 'tc')) {
+    if (closest(tc, 'tbl') !== tbl) continue
+    const addr = childEls(tc, 'cellAddr')[0]
+    const r = intAttr(addr, 'rowAddr')
+    if (addr && r != null && r > row) addr.setAttribute('rowAddr', String(r + 1))
+  }
+  tr.parentNode!.insertBefore(clone, tr.nextSibling)
+  const cnt = intAttr(tbl, 'rowCnt')
+  if (cnt != null) tbl.setAttribute('rowCnt', String(cnt + 1))
+  gridCache.delete(tbl)
+  return clone
+}
+
+/**
+ * 열 머리글 아래로 채우는 표에 답변을 행 단위로 넣는다 (한 줄 = 한 행, " / " 로 열 구분).
+ * 반환: null = 맞는 표를 못 찾음(기존 방식으로 처리), 배열 = 표에 못 넣고 남은 줄들.
+ */
+function fillColumnTable(
+  docs: Document[],
+  spec: ColumnSpec,
+  lines: string[],
+  isQuestionCell: (tc: Element) => boolean,
+  style: StyleInfo,
+  usedTables: Set<Element>,
+): string[] | null {
+  let best: { tbl: Element; doc: Document; header: { row: number; cols: GridCell[] }; score: number } | null = null
+  const nTitle = norm(spec.title)
+  for (const doc of docs) {
+    for (const tbl of descendants(doc.documentElement, 'tbl')) {
+      if (usedTables.has(tbl)) continue
+      const header = findHeader(tbl, spec.columns)
+      if (!header) continue
+      // 같은 머리글의 표가 여럿이면 앞 문단 제목이 문항과 비슷한 쪽을 고른다
+      const score = nTitle ? similarity(norm(textBeforeTable(tbl)), nTitle) : 0
+      if (!best || score > best.score) best = { tbl, doc, header, score }
+    }
+  }
+  if (!best) return null
+
+  const { tbl, doc, header } = best
+  const grid = buildGrid(tbl)
+  const headerBottom = Math.max(...header.cols.map((c) => c.row + c.rowSpan))
+  const rowsCount = Math.max(...grid.cells.map((c) => c.row + c.rowSpan))
+  const classify: Classify = (c) => classifyCell(c, isQuestionCell, style)
+
+  // 머리글 아래에서 대상 칸이 모두 비어 있는(또는 안내문뿐인) 연속된 행들. 질문의 열 순서로 보관.
+  const rowTargets: Array<Array<{ tc: Element; kind: CellKind }>> = []
+  for (let r = headerBottom; r < rowsCount; r++) {
+    const targets: Array<{ tc: Element; kind: CellKind }> = []
+    for (const hc of header.cols) {
+      const cell = grid.at.get(`${r},${hc.col}`)
+      if (!cell || cell.row !== r) break
+      const kind = classify(cell.tc)
+      if (kind !== 'empty' && kind !== 'guide') break
+      targets.push({ tc: cell.tc, kind })
+    }
+    if (targets.length !== header.cols.length) break
+    rowTargets.push(targets)
+  }
+  if (rowTargets.length === 0) return null
+
+  usedTables.add(tbl)
+  const nonEmpty = lines.map((l) => l.trim()).filter(Boolean)
+  const leftover: string[] = []
+  let lastRow = headerBottom + rowTargets.length - 1
+  for (let i = 0; i < nonEmpty.length; i++) {
+    if (i >= rowTargets.length) {
+      // 행이 모자라면 마지막 빈 행을 복제해 늘린다
+      const lastTr = closest(rowTargets[rowTargets.length - 1][0].tc, 'tr')
+      const clone = lastTr ? cloneRowAfter(tbl, lastTr, lastRow) : null
+      if (!clone) { leftover.push(...nonEmpty.slice(i)); break }
+      lastRow++
+      const tcs = childEls(clone, 'tc')
+      rowTargets.push(
+        header.cols.map((hc) => ({
+          tc: tcs.find((tc) => intAttr(childEls(tc, 'cellAddr')[0], 'colAddr') === hc.col) ?? tcs[0],
+          kind: 'empty' as CellKind,
+        })),
+      )
+    }
+    const values = splitRow(nonEmpty[i], header.cols.length)
+    rowTargets[i].forEach((t, k) => {
+      if (values[k]) fillCell(doc, t.tc, t.kind, [values[k]], style)
+    })
+  }
+  return leftover
+}
+
 // ── 본체 ──────────────────────────────────────────────────────
 interface Cand {
   doc: Document
@@ -502,29 +696,54 @@ export async function fillHwpx(template: Buffer, items: HwpxFillItem[]): Promise
   let filled = 0
   let last = -1
 
-  for (const w of work) {
+  // 열 머리글이 있는 "여러 건 입력" 표 문항: 한 줄 = 한 행, " / " 로 열을 나눠 각 칸에 넣는다
+  const sectionDocs = Array.from(docs.values())
+  const usedTables = new Set<Element>()
+  for (let i = 0; i < work.length; ) {
+    const w = work[i]
+    const spec = parseColumnSpec(w.question)
+    const leftover = spec ? fillColumnTable(sectionDocs, spec, w.lines, isQuestionCell, style, usedTables) : null
+    if (leftover === null) { i++; continue }
+    work.splice(i, 1)
+    filled++
+    if (leftover.length > 0) unmatched.push({ question: w.question, lines: leftover })
+  }
+
+  const findBest = (w: { nq: string }, threshold: number) => {
     let best = -1
     let bestScore = 0
     for (let j = 0; j < cands.length; j++) {
       if (used.has(j)) continue
       const s = similarity(cands[j].n, w.nq)
-      if (s < MATCH_THRESHOLD) continue
+      if (s < threshold) continue
       // 더 높은 점수 우선, 동점이면 직전 매칭 이후 위치를 우선
       if (s > bestScore + 1e-9 || (Math.abs(s - bestScore) < 1e-9 && best <= last && j > last)) {
         best = j
         bestScore = s
       }
     }
-    if (best < 0) {
-      unmatched.push({ question: w.question, lines: w.lines })
-      continue
-    }
-    used.add(best)
-    last = best
-    const c = cands[best]
-    if (place(c.doc, c.p, w.lines, isQuestionCell, style)) filled++
-    else unmatched.push({ question: w.question, lines: w.lines })
+    return best
   }
+
+  // 1차: 엄격한 기준. 2차: 못 찾은 문항만 완화된 기준으로 다시 (이미 쓴 문단은 제외)
+  let pending = work
+  for (const threshold of [MATCH_THRESHOLD, RELAXED_THRESHOLD]) {
+    const failed: typeof work = []
+    for (const w of pending) {
+      const best = findBest(w, threshold)
+      if (best < 0) {
+        failed.push(w)
+        continue
+      }
+      used.add(best)
+      last = best
+      const c = cands[best]
+      if (place(c.doc, c.p, w.lines, isQuestionCell, style)) filled++
+      else failed.push(w)
+    }
+    pending = failed
+  }
+  for (const w of pending) unmatched.push({ question: w.question, lines: w.lines })
 
   // 못 찾은 문항은 마지막 구역 끝에 모아서 붙인다
   if (unmatched.length > 0) {

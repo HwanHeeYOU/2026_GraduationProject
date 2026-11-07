@@ -2,13 +2,16 @@ import { NextRequest, NextResponse } from 'next/server'
 import { getServerSession } from 'next-auth'
 import { authOptions } from '@/lib/auth'
 import { prisma } from '@/lib/prisma'
+import { hwpToHwpx } from '@/lib/hwp/hwpToHwpx'
 
 const MAX_FILE_SIZE = 10 * 1024 * 1024
 
 /**
  * POST /api/projects/:id/templates
  * multipart/form-data, 필드명 `file` (여러 개 가능).
- * 업로드한 기관 양식 중 .hwpx 만 원본 그대로 저장한다. (내보내기 때 이 양식에 답변을 채워 넣음)
+ * 업로드한 기관 양식을 저장한다. (내보내기 때 이 양식에 답변을 채워 넣음)
+ *  - .hwpx : 원본 그대로
+ *  - .hwp  : 문단·표(행·열·병합·폭) 구조를 읽어 같은 구조의 .hwpx 로 변환해 저장 (파일 이름은 업로드한 이름 그대로)
  */
 export async function POST(req: NextRequest, { params }: { params: { id: string } }) {
   const session = await getServerSession(authOptions)
@@ -34,11 +37,19 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
   const files = formData
     .getAll('file')
     .filter((f): f is File => f instanceof File)
-    .filter((f) => f.name.toLowerCase().endsWith('.hwpx') && f.size <= MAX_FILE_SIZE)
+    .filter((f) => /\.hwpx?$/i.test(f.name) && f.size <= MAX_FILE_SIZE)
 
   const saved: string[] = []
   for (const f of files) {
-    const data = Buffer.from(await f.arrayBuffer())
+    let data: Buffer = Buffer.from(await f.arrayBuffer())
+    if (/\.hwp$/i.test(f.name)) {
+      try {
+        data = (await hwpToHwpx(data)).hwpx
+      } catch (e) {
+        console.error('[templates] hwp → hwpx 변환 실패:', f.name, e instanceof Error ? e.message : e)
+        continue
+      }
+    }
     await prisma.projectTemplateFile.upsert({
       where: { projectId_fileName: { projectId: project.id, fileName: f.name } },
       create: { projectId: project.id, fileName: f.name, data },

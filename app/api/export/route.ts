@@ -39,7 +39,7 @@ async function exportHwpx(
       const section = output.sections.find((s) => s.fileName === tpl.fileName)
       if (!section) continue
       const r = await fillHwpx(Buffer.from(tpl.data), section.items)
-      results.push({ fileName: tpl.fileName, buffer: r.buffer, unmatched: r.unmatched.length, filled: r.filled })
+      results.push({ fileName: tpl.fileName.replace(/\.hwp$/i, '.hwpx'), buffer: r.buffer, unmatched: r.unmatched.length, filled: r.filled })
     }
     if (results.length === 0) {
       return NextResponse.json(

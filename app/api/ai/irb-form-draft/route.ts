@@ -55,24 +55,8 @@ async function extractText(name: string, buffer: Buffer): Promise<string | null>
   }
   if (ext === 'hwp') {
     try {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const { parse, TableControl } = await import('@hwp.js/parser') as any
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const collect = (paragraphs: any): string[] => {
-        const lines: string[] = []
-        for (const p of Array.from(paragraphs) as any[]) {
-          let line = ''; for (const c of p.chars) line += c.toString()
-          if (line.trim()) lines.push(line.trim())
-          for (const ctrl of p.controls ?? [])
-            if (ctrl instanceof TableControl)
-              for (const cell of ctrl.cells) lines.push(...collect(cell.paragraphs))
-        }
-        return lines
-      }
-      const doc = parse(buffer)
-      const lines: string[] = []
-      for (const sec of doc.sections as any[]) lines.push(...collect(sec.paragraphs))
-      return lines.join('\n').trim() || null
+      const { parseHwpStructure, structureToText } = await import('@/lib/hwp/hwpToHwpx')
+      return structureToText(await parseHwpStructure(buffer)) || null
     } catch { return null }
   }
   if (ext === 'hwpx') {
