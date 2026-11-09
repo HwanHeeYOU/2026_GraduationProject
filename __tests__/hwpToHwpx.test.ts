@@ -67,6 +67,94 @@ describe('hwpToHwpx', () => {
     expect(texts).not.toContain('*소속 대학 및 학과 기술')
   })
 
+  // 지출내역 서식: 1열에 행 번호, 파란 글씨 작성 예시, 마지막에 합계 줄
+  const budget: HwpStructure = {
+    page,
+    blocks: [
+      { kind: 'p', text: '2. 지출내역        (단위 : 원)' },
+      {
+        kind: 'tbl', rows: 5, cols: 4, width: 40000,
+        cells: [
+          ...['구분', '내역', '예산액', '비고'].map((t, c) => cell(0, c, [t])),
+          cell(1, 0, ['1']), cell(1, 1, ['사례비, 재료비 등 기재'], { guide: [true] }), cell(1, 2, ['']), cell(1, 3, ['세부내역 기재'], { guide: [true] }),
+          ...[2, 3].flatMap((r) => [cell(r, 0, [String(r)]), cell(r, 1, ['']), cell(r, 2, ['']), cell(r, 3, [''])]),
+          cell(4, 0, ['총 계']), cell(4, 1, ['0']), cell(4, 2, ['']), cell(4, 3, ['']),
+        ],
+      },
+    ],
+  }
+
+  it('파란 글씨 예시는 〔예시〕 로 표시해 문항 추출용 텍스트에 넣는다', () => {
+    const text = structureToText(budget)
+    expect(text).toContain('1 | 〔예시〕 사례비, 재료비 등 기재 |  | 〔예시〕 세부내역 기재')
+    expect(text).toContain('구분 | 내역 | 예산액 | 비고')
+  })
+
+  it('파란 글씨 예시와 행 번호가 있는 지출 표도 행 단위로 채우고 예시는 지운다', async () => {
+    const buf = await buildHwpx(budget)
+    const r = await fillHwpx(buf, [
+      { question: '지출내역 (구분 / 내역 / 예산액 / 비고) - 여러 건 입력', answer: '인건비 / 연구보조원 2명 / 24,000,000 / 12개월\n재료비 / 검사 시약 / 5,000,000 / -\n회의비 / 자문회의 / 1,000,000 / 2회' },
+    ])
+    expect(r.unmatched).toEqual([])
+    const xml = await (await JSZip.loadAsync(r.buffer)).files['Contents/section0.xml'].async('text')
+    const texts = Array.from(new DOMParser().parseFromString(xml, 'text/xml').getElementsByTagName('hp:t')).map((t) => t.textContent)
+    // 번호 열("구분")의 번호는 그대로 두고, 이 열에 온 값은 다음 열 앞에 붙는다
+    expect(texts).toEqual([
+      '2. 지출내역        (단위 : 원)',
+      '구분', '내역', '예산액', '비고',
+      '1', '인건비 연구보조원 2명', '24,000,000', '12개월',
+      '2', '재료비 검사 시약', '5,000,000', '-',
+      '3', '회의비 자문회의', '1,000,000', '2회',
+      '총 계', '0',
+    ])
+  })
+
+  it('번호 열을 뺀 열 목록이면 번호는 그대로 두고 나머지 열만 채운다', async () => {
+    const buf = await buildHwpx(budget)
+    const r = await fillHwpx(buf, [
+      { question: '지출내역 (내역 / 예산액 / 비고) - 여러 건 입력', answer: '인건비 / 24,000,000 / 12개월\n재료비 / 5,000,000 /' },
+    ])
+    expect(r.unmatched).toEqual([])
+    const xml = await (await JSZip.loadAsync(r.buffer)).files['Contents/section0.xml'].async('text')
+    const texts = Array.from(new DOMParser().parseFromString(xml, 'text/xml').getElementsByTagName('hp:t'))
+      .map((t) => t.textContent).filter((t) => t && t.trim())
+    expect(texts).toEqual([
+      '2. 지출내역        (단위 : 원)',
+      '구분', '내역', '예산액', '비고',
+      '1', '인건비', '24,000,000', '12개월',
+      '2', '재료비', '5,000,000',
+      '3',
+      '총 계', '0',
+    ])
+  })
+
+  it('행을 복제해 늘릴 때 번호를 앞 행에 이어서 매긴다', async () => {
+    const buf = await buildHwpx(budget)
+    const r = await fillHwpx(buf, [
+      { question: '지출내역 (내역 / 예산액 / 비고) - 여러 건 입력', answer: 'A / 1 /\nB / 2 /\nC / 3 /\nD / 4 /' },
+    ])
+    expect(r.unmatched).toEqual([])
+    const xml = await (await JSZip.loadAsync(r.buffer)).files['Contents/section0.xml'].async('text')
+    const texts = Array.from(new DOMParser().parseFromString(xml, 'text/xml').getElementsByTagName('hp:t'))
+      .map((t) => t.textContent).filter((t) => t && t.trim())
+    expect(texts.slice(5)).toEqual(['1', 'A', '1', '2', 'B', '2', '3', 'C', '3', '4', 'D', '4', '총 계', '0'])
+  })
+
+  it('값이 비어 있는 칸의 파란 예시는 지우고 행 번호는 남긴다', async () => {
+    const buf = await buildHwpx(budget)
+    const r = await fillHwpx(buf, [
+      { question: '지출내역 (구분 / 내역 / 예산액 / 비고) - 여러 건 입력', answer: '인건비 / 연구보조원 / 24,000,000 /' },
+    ])
+    const xml = await (await JSZip.loadAsync(r.buffer)).files['Contents/section0.xml'].async('text')
+    const texts = Array.from(new DOMParser().parseFromString(xml, 'text/xml').getElementsByTagName('hp:t'))
+      .map((t) => t.textContent).filter((t) => t && t.trim())
+    expect(texts).not.toContain('세부내역 기재')
+    expect(texts).not.toContain('사례비, 재료비 등 기재')
+    expect(texts).toEqual(expect.arrayContaining(['인건비 연구보조원', '24,000,000', '1', '2', '3']))
+    // 덮어쓴 칸은 파란색(charPr 2)이 아니라 검은색(charPr 0)으로 바뀐다
+    expect(xml).not.toMatch(/charPrIDRef="2"><hp:t>/)
+  })
+
   it('문항 추출용 텍스트에 표 안의 글이 행 단위로 들어간다', () => {
     const text = structureToText(structure)
     expect(text).toContain('성명')

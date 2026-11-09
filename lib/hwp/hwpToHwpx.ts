@@ -4,7 +4,8 @@
  *  .hwp  --parseHwpStructure-->  { 문단, 표(행·열·병합·폭) }  --buildHwpx-->  .hwpx
  *
  * 만들어진 .hwpx 는 fillHwpx 가 그대로 읽어서 답변을 채울 수 있다.
- * 글꼴·색·정렬 같은 세부 서식은 가져오지 않고(기본 서식), 글 내용·표 구조·셀 병합·열 폭을 보존한다.
+ * 글꼴·정렬 같은 세부 서식은 가져오지 않고(기본 서식), 글 내용·표 구조·셀 병합·열 폭을 보존한다.
+ * 색은 "파란 글씨 = 작성 예시·안내" 관례 하나만 가져온다 (fillHwpx 가 예시를 지우고 답변으로 덮어쓸 수 있도록).
  * 그림·도형·머리글/바닥글은 가져오지 않는다.
  */
 import JSZip from 'jszip'
@@ -18,10 +19,12 @@ export interface HwpCell {
   height: number
   /** 셀 안의 문단 텍스트들 */
   paras: string[]
+  /** paras 와 같은 길이. true 면 그 문단이 전부 파란 글씨(양식의 작성 예시·안내 문구 관례) */
+  guide?: boolean[]
 }
 
 export type HwpBlock =
-  | { kind: 'p'; text: string }
+  | { kind: 'p'; text: string; guide?: boolean }
   | { kind: 'tbl'; rows: number; cols: number; width: number; cells: HwpCell[] }
 
 export interface HwpStructure {
@@ -47,15 +50,45 @@ function paraText(p: Any): string {
   return s.replace(CONTROL_CHARS, '').replace(/\r/g, '')
 }
 
+/** 파란 계열 글자색인가 (fillHwpx 의 안내문 판별과 같은 기준) */
+function isBlueColor(c: Any): boolean {
+  return !!c && c.blue >= 150 && c.red <= 100 && c.green <= 140
+}
+
+/**
+ * 문단의 글자가 전부 파란색인가. 문단의 charShapes(시작 위치 → 글자 모양)와
+ * DocInfo 의 글자 모양 색을 대조한다. 글자가 하나도 없으면 false.
+ */
+function paraIsBlue(p: Any, shapes: Any[]): boolean {
+  if (!shapes.length) return false
+  const runs = (Array.from((p.charShapes ?? []) as Any[]) as Any[])
+    .map((r) => ({ start: Number(r.startPosition ?? 0), id: Number(r.shapeId) }))
+    .sort((a, b) => a.start - b.start)
+  if (runs.length === 0) return false
+  const chars = Array.from(p.chars as Any[]).map((c) => String(c.toString()))
+  let any = false
+  for (let i = 0; i < chars.length; i++) {
+    const ch = chars[i].replace(CONTROL_CHARS, '')
+    if (!ch.trim()) continue
+    let id = runs[0].id
+    for (const r of runs) if (r.start <= i) id = r.id
+    if (!isBlueColor(shapes[id]?.color)) return false
+    any = true
+  }
+  return any
+}
+
 export async function parseHwpStructure(buffer: Buffer): Promise<HwpStructure> {
   const { parse, TableControl } = (await import('@hwp.js/parser')) as Any
   const doc = parse(buffer)
   const page = { ...DEFAULT_PAGE }
   const blocks: HwpBlock[] = []
+  const shapes: Any[] = doc.info?.idMappings?.charShapes ?? []
 
   const readTable = (t: Any): HwpBlock => {
     const cells: HwpCell[] = []
     for (const cell of t.cells) {
+      const cps = Array.from(cell.paragraphs as Any[])
       cells.push({
         row: cell.row,
         col: cell.column,
@@ -63,7 +96,8 @@ export async function parseHwpStructure(buffer: Buffer): Promise<HwpStructure> {
         colSpan: Math.max(1, cell.colSpan ?? 1),
         width: cell.width,
         height: cell.height,
-        paras: Array.from(cell.paragraphs as Any[]).map(paraText),
+        paras: cps.map(paraText),
+        guide: cps.map((cp) => paraIsBlue(cp, shapes)),
       })
     }
     return {
@@ -99,21 +133,25 @@ export async function parseHwpStructure(buffer: Buffer): Promise<HwpStructure> {
           firstSection = false
         }
       }
-      if (text.trim() || tables.length === 0) blocks.push({ kind: 'p', text })
+      if (text.trim() || tables.length === 0) blocks.push({ kind: 'p', text, guide: paraIsBlue(p, shapes) })
       blocks.push(...tables)
     }
   }
   return { blocks, page }
 }
 
+/** 문항 추출용 텍스트에서 작성 예시(파란 글씨)를 표시하는 접두어 */
+export const EXAMPLE_MARK = '〔예시〕'
+
 /**
  * 문항 추출용 텍스트. 표는 행마다 한 줄로, 셀은 " | " 로 이어 열 머리글(구분 | 내역 | 예산액 …)이 보이게 한다.
+ * 파란 글씨(작성 예시·안내)는 〔예시〕 로 표시해 AI 가 문항으로 오인하지 않게 한다.
  */
 export function structureToText(structure: HwpStructure): string {
   const lines: string[] = []
   for (const b of structure.blocks) {
     if (b.kind === 'p') {
-      if (b.text.trim()) lines.push(b.text.trim())
+      if (b.text.trim()) lines.push(b.guide ? `${EXAMPLE_MARK} ${b.text.trim()}` : b.text.trim())
       continue
     }
     const rows = new Map<number, HwpCell[]>()
@@ -125,7 +163,12 @@ export function structureToText(structure: HwpStructure): string {
       const line = rows
         .get(r)!
         .sort((a, b2) => a.col - b2.col)
-        .map((c) => c.paras.map((x) => x.trim()).filter(Boolean).join(' '))
+        .map((c) =>
+          c.paras
+            .map((x, i) => (c.guide?.[i] && x.trim() ? `${EXAMPLE_MARK} ${x.trim()}` : x.trim()))
+            .filter(Boolean)
+            .join(' '),
+        )
         .join(' | ')
       if (line.replace(/[|\s]/g, '')) lines.push(line)
     }
@@ -183,11 +226,15 @@ function paraPr(id: number, align: string, spacing: number): string {
   )
 }
 
-function charPr(id: number, bold: boolean): string {
+/** 작성 예시(안내) 문단에 쓰는 글자 스타일. 파란색 — fillHwpx 가 안내문으로 보고 덮어쓴다. */
+const GUIDE_CHARPR_ID = 2
+const GUIDE_COLOR = '#2E74B5'
+
+function charPr(id: number, bold: boolean, color = '#000000'): string {
   const all = (tag: string, v: number) =>
     `<hh:${tag} hangul="${v}" latin="${v}" hanja="${v}" japanese="${v}" other="${v}" symbol="${v}" user="${v}"/>`
   return (
-    `<hh:charPr id="${id}" height="1000" textColor="#000000" shadeColor="none" useFontSpace="0" useKerning="0" symMark="NONE" borderFillIDRef="2">` +
+    `<hh:charPr id="${id}" height="1000" textColor="${color}" shadeColor="none" useFontSpace="0" useKerning="0" symMark="NONE" borderFillIDRef="2">` +
     all('fontRef', 0) + all('ratio', 100) + all('spacing', 0) + all('relSz', 100) + all('offset', 0) +
     (bold ? '<hh:bold/>' : '') +
     '<hh:underline type="NONE" shape="SOLID" color="#000000"/><hh:strikeout shape="NONE" color="#000000"/><hh:outline type="NONE"/>' +
@@ -203,7 +250,7 @@ function headerXml(): string {
     '<hh:refList>' +
     fontfaces() +
     `<hh:borderFills itemCnt="3">${borderFill(1, false)}${borderFill(2, false)}${borderFill(3, true)}</hh:borderFills>` +
-    `<hh:charProperties itemCnt="2">${charPr(0, false)}${charPr(1, true)}</hh:charProperties>` +
+    `<hh:charProperties itemCnt="3">${charPr(0, false)}${charPr(1, true)}${charPr(GUIDE_CHARPR_ID, false, GUIDE_COLOR)}</hh:charProperties>` +
     '<hh:tabProperties itemCnt="1"><hh:tabPr id="0" autoTabLeft="0" autoTabRight="0"/></hh:tabProperties>' +
     `<hh:paraProperties itemCnt="2">${paraPr(0, 'LEFT', 160)}${paraPr(1, 'LEFT', 130)}</hh:paraProperties>` +
     '<hh:styles itemCnt="1"><hh:style id="0" type="PARA" name="바탕글" engName="Normal" paraPrIDRef="0" charPrIDRef="0" nextStyleIDRef="0" langID="1042" lockForm="0"/></hh:styles>' +
@@ -233,9 +280,9 @@ function secPr(page: HwpStructure['page']): string {
   )
 }
 
-const para = (text: string, paraPrId: number, inner = '') =>
+const para = (text: string, paraPrId: number, inner = '', charPrId = 0) =>
   `<hp:p id="0" paraPrIDRef="${paraPrId}" styleIDRef="0" pageBreak="0" columnBreak="0" merged="0">` +
-  `<hp:run charPrIDRef="0">${inner}${text ? `<hp:t>${esc(text)}</hp:t>` : ''}</hp:run></hp:p>`
+  `<hp:run charPrIDRef="${charPrId}">${inner}${text ? `<hp:t>${esc(text)}</hp:t>` : ''}</hp:run></hp:p>`
 
 function tableXml(t: Extract<HwpBlock, { kind: 'tbl' }>, id: number, textWidth: number): string {
   const scale = t.width > textWidth ? textWidth / t.width : 1
@@ -257,7 +304,9 @@ function tableXml(t: Extract<HwpBlock, { kind: 'tbl' }>, id: number, textWidth: 
         .get(r)!
         .sort((a, b) => a.col - b.col)
         .map((c) => {
-          const paras = (c.paras.length ? c.paras : ['']).map((x) => para(x, 1)).join('')
+          const paras = (c.paras.length ? c.paras : [''])
+            .map((x, i) => para(x, 1, '', c.guide?.[i] && x.trim() ? GUIDE_CHARPR_ID : 0))
+            .join('')
           return (
             '<hp:tc name="" header="0" hasMargin="0" protect="0" editable="0" dirty="0" borderFillIDRef="3">' +
             `<hp:subList id="" textDirection="HORIZONTAL" lineWrap="BREAK" vertAlign="CENTER" linkListIDRef="0" linkListNextIDRef="0" textWidth="0" textHeight="0" hasTextRef="0" hasNumRef="0">${paras}</hp:subList>` +
@@ -288,12 +337,12 @@ export async function buildHwpx(structure: HwpStructure): Promise<Buffer> {
   const body = blocks
     .map((b) =>
       b.kind === 'p'
-        ? para(b.text, 0)
+        ? para(b.text, 0, '', b.guide && b.text.trim() ? GUIDE_CHARPR_ID : 0)
         : para('', 0, tableXml(b, tblId++, textWidth)),
     )
   // 첫 문단 첫 run 에 구역 속성(secPr)이 있어야 한다
   const first = body.length ? body[0] : para('', 0)
-  const withSec = first.replace('<hp:run charPrIDRef="0">', `<hp:run charPrIDRef="0">${secPr(page)}`)
+  const withSec = first.replace(/<hp:run charPrIDRef="(\d+)">/, `<hp:run charPrIDRef="$1">${secPr(page)}`)
   const section = `${DECL}<hs:sec ${NS}>${[withSec, ...body.slice(1)].join('')}</hs:sec>`
 
   const preview = blocks

@@ -1,4 +1,4 @@
-// @vitest-environment node
+﻿// @vitest-environment node
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { MISSING_MARKER } from '@/lib/irb/draftStore'
 
@@ -90,8 +90,8 @@ describe('PATCH /api/ai/irb-form-draft (보충 입력 → 병합 → 누락만 �
     // AI 응답: 호출된 프롬프트의 파일명에 맞춰 답을 돌려준다
     generateText.mockImplementation(async ({ messages }: { messages: { content: string }[] }) => {
       const prompt = messages[0].content
-      if (prompt.includes('[파일: A.hwpx]')) return '[파일: A.hwpx]\n[문항] 문서 버전\n[답변] v2.0'
-      if (prompt.includes('[파일: B.hwpx]')) return '[파일: B.hwpx]\n[문항] 서식 버전\n[답변] v2.0'
+      if (prompt.includes('[파일: A.hwpx]')) return '[파일: A.hwpx]\n[문항] 문서 버전\n[답변] v2.0\n[근거] 버전은 2.0'
+      if (prompt.includes('[파일: B.hwpx]')) return '[파일: B.hwpx]\n[문항] 서식 버전\n[답변] v2.0\n[근거] 버전은 2.0'
       return ''
     })
 

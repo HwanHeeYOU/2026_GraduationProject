@@ -179,6 +179,9 @@ function norm(s: string): string {
   return s
     .normalize('NFC')
     .toLowerCase()
+    // 양식의 작성 안내("(필요시 칸을 추가하여 …)")와 AI 문항의 꼬리표("- 여러 건 입력")는 라벨 비교에서 제외
+    .replace(/[(（]\s*필요\s*시[^)）]*[)）]/g, '')
+    .replace(/\s*[-–—:]?\s*여러\s*건\s*입력\s*$/, '')
     .replace(/^\s*[※*•·○●■□▶▷\-–]+\s*/, '')
     .replace(/^\s*[(\[]?\s*(?:\d{1,2}|[가-하]|[a-z])\s*[.)\]]\s*/, '')
     .replace(/[\s:：;,.\-_()[\]{}<>「」『』"'“”‘’·•※*?!/\\]/g, '')
@@ -306,8 +309,14 @@ const GUIDE_PAREN = /^\s*[(（[【].{8,}[)）\]】]\s*$/
 /** 하위 라벨: "휴대전화 :", "연구실 : ____" (콜론 뒤에 빈칸 표시뿐) */
 const SUBLABEL = /^\s*[^:：]{1,24}?\s*[:：]\s*(?:[_＿.…\s]|\u00a0)*$/
 
+/** 자리표시 문구: "대학/대학원      학과/학부" — 공백을 크게 띄워 두 칸처럼 보이게 한 "A/B   C/D" 형태 */
+const SLASH_PLACEHOLDER = /^[^\s/]{1,12}\/[^\s/]{1,12}\s{3,}[^\s/]{1,12}\/[^\s/]{1,12}$/
+
+/** 체크박스 한 개 */
+const BOX_RE = /[□☐]/g
+
 type ParaKind = 'blank' | 'guide' | 'sublabel' | 'content'
-type CellKind = 'empty' | 'guide' | 'sublabels' | 'content'
+type CellKind = 'empty' | 'guide' | 'sublabels' | 'choices' | 'content'
 
 /** header.xml 에서 읽은 글자 스타일 정보 (안내문의 파란색 판별 · 어두운 대체 스타일 찾기) */
 interface StyleInfo {
@@ -366,7 +375,7 @@ function paraIsBlue(p: Element, style: StyleInfo): boolean {
 function classifyPara(p: Element, style: StyleInfo): ParaKind {
   const text = ownText(p).trim()
   if (PLACEHOLDER_ONLY.test(text)) return 'blank'
-  if (DATE_PLACEHOLDER.test(text)) return 'guide'
+  if (DATE_PLACEHOLDER.test(text) || SLASH_PLACEHOLDER.test(text)) return 'guide'
   if (GUIDE_MARK.test(text) || GUIDE_PAREN.test(text)) return 'guide'
   if (SUBLABEL.test(text)) return 'sublabel'
   if (GUIDE_END.test(text) || paraIsBlue(p, style)) return 'guide'
@@ -378,6 +387,7 @@ function classifyPara(p: Element, style: StyleInfo): ParaKind {
  *  empty     비었거나 밑줄뿐        → 그대로 채움
  *  guide     양식의 안내 문구       → 지우고 답변으로 덮어씀
  *  sublabels "휴대전화 :" 같은 하위 라벨 → 라벨 뒤에 이어 붙임
+ *  choices   "□ 교수  □ 박사과정" 같은 선택지 → 답변과 맞는 항목에 체크
  *  content   다른 라벨/이미 쓴 답/표 등 → 건드리지 않음
  */
 function classifyCell(tc: Element, isQuestionCell: (tc: Element) => boolean, style: StyleInfo): CellKind {
@@ -385,6 +395,7 @@ function classifyCell(tc: Element, isQuestionCell: (tc: Element) => boolean, sty
   if (descendants(tc, 'tbl').length > 0) return 'content'
   const paras = cellParas(tc)
   if (paras.length === 0) return 'content'
+  if ((paras.map(ownText).join('\n').match(BOX_RE) ?? []).length >= 2) return 'choices'
   const kinds = paras.map((p) => classifyPara(p, style))
   if (kinds.every((k) => k === 'blank')) return 'empty'
   if (kinds.some((k) => k === 'content')) return 'content'
@@ -439,6 +450,14 @@ function findBelow(grid: TableGrid, origin: GridCell, classify: Classify): Found
 }
 
 // ── 열 머리글이 있는 "여러 건 입력" 표 ─────────────────────────
+/** 행 번호만 든 칸인가: n번째 행의 "n", "n.", "n)", "①"(n=1) */
+function isRowNumber(text: string, n: number): boolean {
+  const t = text.trim()
+  const m = /^(\d{1,3})\s*[.)]?$/.exec(t)
+  if (m) return Number(m[1]) === n
+  return t.length === 1 && t.charCodeAt(0) - 0x2460 + 1 === n
+}
+
 interface ColumnSpec {
   title: string
   columns: string[]
@@ -447,7 +466,13 @@ interface ColumnSpec {
 /** "표 이름 (열1 / 열2 / 열3) - 여러 건 입력" → 표 이름과 열 이름들 */
 function parseColumnSpec(question: string): ColumnSpec | null {
   const groups = Array.from(question.matchAll(/[(（]([^()（）]*\/[^()（）]*)[)）]/g))
-  if (groups.length === 0) return null
+  if (groups.length === 0) {
+    // AI 가 괄호·표 이름을 빠뜨린 "열1 / 열2 / 열3 - 여러 건 입력" 형태. 오탐을 막으려고 표식이 있을 때만 인정한다.
+    const m = question.match(/^(.*?)\s*[-–—:]?\s*여러\s*건\s*입력\s*$/)
+    if (!m || !m[1].includes('/')) return null
+    const columns = m[1].split('/').map((c) => c.trim()).filter(Boolean)
+    return columns.length >= 2 ? { title: '', columns } : null
+  }
   const g = groups[groups.length - 1]
   const columns = g[1].split('/').map((c) => c.trim()).filter(Boolean)
   if (columns.length < 2) return null
@@ -487,7 +512,11 @@ function matchHeaderCell(cells: GridCell[], col: string, taken: Set<GridCell>): 
 }
 
 /** 모든 열 이름이 한 행에서 발견되는 머리글 행. cols 는 질문의 열 순서와 같다. */
-function findHeader(tbl: Element, columns: string[]): { row: number; cols: GridCell[] } | null {
+function findHeader(
+  tbl: Element,
+  columns: string[],
+  usedHeaders: Set<Element>,
+): { row: number; cols: GridCell[] } | null {
   const grid = buildGrid(tbl)
   const rows = new Map<number, GridCell[]>()
   for (const c of grid.cells) {
@@ -503,7 +532,8 @@ function findHeader(tbl: Element, columns: string[]): { row: number; cols: GridC
       taken.add(m)
       cols.push(m)
     }
-    if (cols.length === columns.length) return { row, cols }
+    // 이미 다른 문항이 채운 머리글 행은 건너뛴다 (여러 소제목의 표가 한 표로 이어진 양식 대응)
+    if (cols.length === columns.length && !cols.some((c) => usedHeaders.has(c.tc))) return { row, cols }
   }
   return null
 }
@@ -562,14 +592,13 @@ function fillColumnTable(
   lines: string[],
   isQuestionCell: (tc: Element) => boolean,
   style: StyleInfo,
-  usedTables: Set<Element>,
+  usedHeaders: Set<Element>,
 ): string[] | null {
   let best: { tbl: Element; doc: Document; header: { row: number; cols: GridCell[] }; score: number } | null = null
   const nTitle = norm(spec.title)
   for (const doc of docs) {
     for (const tbl of descendants(doc.documentElement, 'tbl')) {
-      if (usedTables.has(tbl)) continue
-      const header = findHeader(tbl, spec.columns)
+      const header = findHeader(tbl, spec.columns, usedHeaders)
       if (!header) continue
       // 같은 머리글의 표가 여럿이면 앞 문단 제목이 문항과 비슷한 쪽을 고른다
       const score = nTitle ? similarity(norm(textBeforeTable(tbl)), nTitle) : 0
@@ -582,7 +611,17 @@ function fillColumnTable(
   const grid = buildGrid(tbl)
   const headerBottom = Math.max(...header.cols.map((c) => c.row + c.rowSpan))
   const rowsCount = Math.max(...grid.cells.map((c) => c.row + c.rowSpan))
-  const classify: Classify = (c) => classifyCell(c, isQuestionCell, style)
+  // 열 표에서는 미리 인쇄된 행 번호("1", "2.", "③")만 든 칸도 값을 덮어쓸 수 있는 칸으로 본다
+  // 단, 머리글 아래 n번째 행에서 값이 정확히 n 일 때만 행 번호로 본다 (합계 줄의 "0" 같은 값은 내용으로 남긴다)
+  const numberCells = new Set<Element>()
+  const classify = (c: Element, nth: number): CellKind => {
+    const kind = classifyCell(c, isQuestionCell, style)
+    if (kind === 'content' && isRowNumber(cellText(c), nth)) {
+      numberCells.add(c)
+      return 'guide'
+    }
+    return kind
+  }
 
   // 머리글 아래에서 대상 칸이 모두 비어 있는(또는 안내문뿐인) 연속된 행들. 질문의 열 순서로 보관.
   const rowTargets: Array<Array<{ tc: Element; kind: CellKind }>> = []
@@ -591,7 +630,7 @@ function fillColumnTable(
     for (const hc of header.cols) {
       const cell = grid.at.get(`${r},${hc.col}`)
       if (!cell || cell.row !== r) break
-      const kind = classify(cell.tc)
+      const kind = classify(cell.tc, r - headerBottom + 1)
       if (kind !== 'empty' && kind !== 'guide') break
       targets.push({ tc: cell.tc, kind })
     }
@@ -600,7 +639,14 @@ function fillColumnTable(
   }
   if (rowTargets.length === 0) return null
 
-  usedTables.add(tbl)
+  // 모든 행에 번호가 미리 인쇄된 열(예: 지출내역의 "구분" 1, 2, 3 …)은 번호 열이다. 번호는 건드리지 않는다.
+  const numberCols = new Set<number>()
+  header.cols.forEach((_, k) => {
+    if (rowTargets.every((row) => numberCells.has(row[k].tc))) numberCols.add(k)
+  })
+  if (numberCols.size === header.cols.length) numberCols.clear()
+
+  for (const hc of header.cols) usedHeaders.add(hc.tc)
   const nonEmpty = lines.map((l) => l.trim()).filter(Boolean)
   const leftover: string[] = []
   let lastRow = headerBottom + rowTargets.length - 1
@@ -618,10 +664,28 @@ function fillColumnTable(
           kind: 'empty' as CellKind,
         })),
       )
+      // 복제한 행의 번호 칸은 앞 행 번호에 이어서 매긴다 (7 → 8, "7." → "8."). 열 목록 밖의 번호 열도 포함.
+      const prevTcs = lastTr ? childEls(lastTr, 'tc') : []
+      const nth = rowTargets.length - 1 // 앞 행이 머리글 아래 몇 번째 행인지
+      prevTcs.forEach((ptc, idx) => {
+        const m = /^\s*(\d{1,3})\s*([.)]?)\s*$/.exec(cellText(ptc))
+        if (m && Number(m[1]) === nth && tcs[idx]) fillCell(doc, tcs[idx], 'empty', [`${nth + 1}${m[2]}`], style)
+      })
     }
     const values = splitRow(nonEmpty[i], header.cols.length)
+    // 번호 열에 AI 가 값(예: "인건비")을 줬다면 번호는 두고, 그 값을 다음 열 앞에 붙인다
+    numberCols.forEach((k) => {
+      const v = values[k]
+      values[k] = ''
+      if (!v || /^\d{1,3}\s*[.)]?$/.test(v)) return
+      const j = values.findIndex((_, idx) => idx > k && !numberCols.has(idx))
+      if (j >= 0) values[j] = values[j] ? `${v} ${values[j]}` : v
+    })
     rowTargets[i].forEach((t, k) => {
+      if (numberCols.has(k)) return
       if (values[k]) fillCell(doc, t.tc, t.kind, [values[k]], style)
+      // 값이 없는 칸의 작성 예시(파란 글씨 등)는 지운다. 행 번호는 그대로 둔다.
+      else if (t.kind === 'guide' && !numberCells.has(t.tc)) fillCell(doc, t.tc, 'guide', [''], style)
     })
   }
   return leftover
@@ -659,8 +723,15 @@ export async function fillHwpx(template: Buffer, items: HwpxFillItem[]): Promise
     const doc = parser.parseFromString(xml, 'text/xml')
     docs.set(name, doc)
     for (const p of descendants(doc.documentElement, 'p')) {
-      const n = norm(ownText(p))
+      const text = ownText(p)
+      const n = norm(text)
       if (n) cands.push({ doc, p, n })
+      // "3. 연구기간 : IRB승인후부터 ~ 0000년 00월 00일" 처럼 라벨 뒤에 템플릿이 붙은 문단은 콜론 앞 라벨로도 찾는다
+      const ci = text.search(/[:：]/)
+      if (ci >= 2 && ci <= 30 && text.slice(ci + 1).trim()) {
+        const ln = norm(text.slice(0, ci))
+        if (ln && ln !== n) cands.push({ doc, p, n: ln })
+      }
     }
   }
 
@@ -691,29 +762,80 @@ export async function fillHwpx(template: Buffer, items: HwpxFillItem[]): Promise
     } catch { /* 스타일 정보 없이 진행 */ }
   }
 
+  // 파란 글씨 안내문("〔예시〕 …")은 칸의 이름(라벨)이 아니므로 문항 매칭 후보에서 뺀다
+  const blueParas = new Set(cands.filter((c) => paraIsBlue(c.p, style)).map((c) => c.p))
   const used = new Set<number>()
+  // 같은 문단이 두 후보(전체 글 / 콜론 앞 라벨)로 들어가 있으므로, 문단 단위로도 사용 여부를 기록한다
+  const usedP = new Set<Element>()
+  // 제목 구역 목록 — 아무것도 채우기 전에 만들어, 이번에 넣은 답변이 구역 글에 섞이지 않게 한다
+  const sections = buildSections(Array.from(docs.values()), style)
   const unmatched: Array<{ question: string; lines: string[] }> = []
   let filled = 0
   let last = -1
 
   // 열 머리글이 있는 "여러 건 입력" 표 문항: 한 줄 = 한 행, " / " 로 열을 나눠 각 칸에 넣는다
   const sectionDocs = Array.from(docs.values())
-  const usedTables = new Set<Element>()
+  const usedHeaders = new Set<Element>()
   for (let i = 0; i < work.length; ) {
     const w = work[i]
     const spec = parseColumnSpec(w.question)
-    const leftover = spec ? fillColumnTable(sectionDocs, spec, w.lines, isQuestionCell, style, usedTables) : null
+    const leftover = spec ? fillColumnTable(sectionDocs, spec, w.lines, isQuestionCell, style, usedHeaders) : null
     if (leftover === null) { i++; continue }
     work.splice(i, 1)
     filled++
     if (leftover.length > 0) unmatched.push({ question: w.question, lines: leftover })
   }
 
+  // "공동연구자 성명" 처럼 병합된 그룹 칸("공동연구자") 아래의 하위 라벨("성 명") 한 줄을 가리키는 문항.
+  // 구조로 정확히 찾을 수 있으므로 글자 유사도 매칭보다 먼저 처리해 그룹 칸에 잘못 붙는 일을 막는다.
+  const candIndex = new Map<Element, number>(cands.map((c, j) => [c.p, j]))
+  const usedSubs = new Set<Element>()
+  const placeGrouped = (nq: string, lines: string[]): boolean => {
+    for (const hit of groupedLabelCandidates(sectionDocs, nq)) {
+      if (usedSubs.has(hit.tc)) continue
+      usedSubs.add(hit.tc)
+      if (!place(hit.doc, hit.p, lines, isQuestionCell, style)) continue
+      const j = candIndex.get(hit.p)
+      if (j !== undefined) used.add(j)
+      usedP.add(hit.p)
+      return true
+    }
+    return false
+  }
+  for (let i = 0; i < work.length; ) {
+    const w = work[i]
+    const multi = parseGroupedMulti(w.question)
+    if (multi) {
+      // "공동연구자 성명 / 소속 / 직위" + 답변 "박서연 / 한국대 / 부교수" → 하위 라벨마다 한 칸씩
+      const rows = w.lines.map((l) => splitRow(l, multi.subs.length))
+      let placed = 0
+      const failed: Array<{ question: string; lines: string[] }> = []
+      multi.subs.forEach((sub, k) => {
+        const subLines = rows.map((r) => r[k]).filter(Boolean)
+        if (subLines.length === 0) return
+        const question = `${multi.group} ${sub}`
+        if (placeGrouped(norm(question), subLines)) placed++
+        else failed.push({ question, lines: subLines })
+      })
+      if (placed > 0) {
+        work.splice(i, 1)
+        filled++
+        unmatched.push(...failed)
+        continue
+      }
+    } else if (placeGrouped(w.nq, w.lines)) {
+      work.splice(i, 1)
+      filled++
+      continue
+    }
+    i++
+  }
+
   const findBest = (w: { nq: string }, threshold: number) => {
     let best = -1
     let bestScore = 0
     for (let j = 0; j < cands.length; j++) {
-      if (used.has(j)) continue
+      if (used.has(j) || usedP.has(cands[j].p) || blueParas.has(cands[j].p)) continue
       const s = similarity(cands[j].n, w.nq)
       if (s < threshold) continue
       // 더 높은 점수 우선, 동점이면 직전 매칭 이후 위치를 우선
@@ -736,12 +858,50 @@ export async function fillHwpx(template: Buffer, items: HwpxFillItem[]): Promise
         continue
       }
       used.add(best)
+      usedP.add(cands[best].p)
       last = best
       const c = cands[best]
-      if (place(c.doc, c.p, w.lines, isQuestionCell, style)) filled++
+      if (place(c.doc, c.p, w.lines, isQuestionCell, style, /여러\s*건\s*입력/.test(w.question))) filled++
       else failed.push(w)
     }
     pending = failed
+  }
+  // 3차: 제목 구역 매칭. 문항 단어가 전부 어떤 제목 구역(제목 + 그 아래 안내문)에 들어 있으면 그 제목 아래에 넣는다.
+  //  예) "개인정보 수집 항목", "개인정보 제공 여부" → "4) 개인정보 보호 및 제공에 관한 사항" 구역 (안내문에 두 말이 모두 있음)
+  //      "안전대책과 보상" → "2) 연구참여로 발생할 수 있는 위험 및 손실에 대한 안전대책과 보상"
+  if (pending.length > 0 && sections.length > 0) {
+    const bySection = new Map<Section, typeof work>()
+    const rest: typeof work = []
+    for (const w of pending) {
+      // 이미 다른 문항이 답을 넣은 제목 구역도 같이 쓸 수 있다 (같은 구역의 하위 문항들)
+      const s = pickSection(sections, w.question, new Set())
+      if (!s) { rest.push(w); continue }
+      bySection.set(s, [...(bySection.get(s) ?? []), w])
+    }
+    bySection.forEach((ws, s) => {
+      const reused = usedP.has(s.p)
+      // 같은 내용이 이미 이 구역에 들어가 있으면 다시 넣지 않는다 (예: "보상계획 없음" ⊂ 앞 문항의 답)
+      const existing = reused ? textAfter(s.p, 8) : ''
+      const answers = ws.map((w) => norm(w.lines.join('')))
+      const fresh = ws.filter((_, k) => {
+        const a = answers[k]
+        if (!a) return true
+        if (existing.includes(a)) return false
+        // 같은 묶음의 다른 답에 이미 들어 있는 내용이면 뺀다 (같은 답이면 앞의 것만 남긴다)
+        return !answers.some((b, j) => j !== k && b.includes(a) && (b !== a || j < k))
+      })
+      filled += ws.length - fresh.length
+      if (fresh.length === 0) return
+      // 한 구역에 문항이 여럿이거나 이미 다른 답이 있으면 "문항: 답변" 한 줄씩으로 넣는다
+      const lines =
+        fresh.length === 1 && !reused
+          ? fresh[0].lines
+          : fresh.map((w) => `${shortLabel(w.question)}: ${w.lines.map((l) => l.trim()).filter(Boolean).join(' ')}`)
+      fillInline(s.doc, s.p, lines)
+      usedP.add(s.p)
+      filled += fresh.length
+    })
+    pending = rest
   }
   for (const w of pending) unmatched.push({ question: w.question, lines: w.lines })
 
@@ -780,6 +940,139 @@ export async function fillHwpx(template: Buffer, items: HwpxFillItem[]): Promise
 }
 
 /**
+ * "공동연구자 성명 / 소속 / 직위" → 그룹 "공동연구자" + 하위 라벨 [성명, 소속, 직위].
+ * 괄호가 있는 열 표 문항("근무 경력 (기간 / 소속 / 직위)")이나 하위 라벨이 긴 경우는 아님.
+ */
+function parseGroupedMulti(question: string): { group: string; subs: string[] } | null {
+  if (/[(（]/.test(question)) return null
+  const parts = question.replace(/\s*[-–—]?\s*여러\s*건\s*입력\s*$/, '').split('/').map((s) => s.trim()).filter(Boolean)
+  if (parts.length < 2 || parts.length > 6) return null
+  const words = parts[0].split(/\s+/)
+  if (words.length < 2) return null
+  const subs = [words[words.length - 1], ...parts.slice(1)]
+  if (subs.some((s) => s.length > 10 || s.split(/\s+/).length > 2)) return null
+  return { group: words.slice(0, -1).join(' '), subs }
+}
+
+// ── 제목 구역 (번호가 붙은 제목 + 그 아래 안내문) ────────────────
+/** "4) …", "6. …", "가. …", "① …", "(1) …" 처럼 번호로 시작하는 제목 */
+const HEADING_RE = /^\s*(?:\d{1,2}\s*[.)]|[가-하]\s*[.)]|[①-⑳]|\(\d{1,2}\))\s*\S/
+
+interface Section {
+  doc: Document
+  /** 제목 문단 — 답변은 이 문단 바로 뒤에 들어간다 */
+  p: Element
+  head: string
+  /** 제목 아래(다음 제목 전까지) 문단 글 — 문항을 만든 안내문이 여기에 있다 */
+  body: string
+}
+
+/** 본문(최상위) 문단만 훑어 제목 구역 목록을 만든다. 파란 글씨 안내문과 표 안의 글은 제목으로 보지 않는다. */
+function buildSections(docs: Document[], style: StyleInfo): Section[] {
+  const out: Section[] = []
+  for (const doc of docs) {
+    let cur: Section | null = null
+    for (const p of childEls(doc.documentElement, 'p')) {
+      const text = ownText(p).trim()
+      if (!text) continue
+      if (text.length <= 100 && HEADING_RE.test(text) && classifyPara(p, style) === 'content') {
+        cur = { doc, p, head: norm(text), body: '' }
+        out.push(cur)
+      } else if (cur && cur.body.length < 4000) {
+        cur.body += norm(text)
+      }
+    }
+  }
+  return out
+}
+
+/** p 바로 뒤 문단 n개의 글 (정규화) — 이미 넣은 답과 중복인지 볼 때 사용 */
+function textAfter(p: Element, n: number): string {
+  let out = ''
+  let count = 0
+  for (let s = p.nextSibling; s && count < n; s = s.nextSibling) {
+    if (s.nodeType !== 1 || lname(s) !== 'p') continue
+    out += norm(ownText(s as Element))
+    count++
+  }
+  return out
+}
+
+/** 문항에서 비교용 단어를 뽑는다 (괄호·"여러 건 입력" 제외, 2자 이상). */
+function labelTokens(question: string): string[] {
+  const cleaned = question
+    .replace(/[(（][^)）]*[)）]/g, ' ')
+    .replace(/여러\s*건\s*입력/g, ' ')
+    .replace(/[-–—:/·,]/g, ' ')
+  return cleaned.split(/\s+/).map(norm).filter((t) => t.length >= 2 && !SECTION_STOPWORDS.has(t))
+}
+
+/** 제목 구역 비교에서 빼는 말 — 양식 안내문에 그대로 안 나와도 되는 문항 꼬리말 */
+const SECTION_STOPWORDS = new Set(['여부', '또는', '혹은', '사항', '내용', '관련', '및', '등', '시', '경우', '방법', '단계'])
+
+const shortLabel = (question: string) =>
+  question.replace(/[(（][^)）]*[)）]/g, '').replace(/\s*[-–—]?\s*여러\s*건\s*입력\s*$/, '').trim()
+
+/** 단어들 중 text 에 들어 있는 것의 글자 수 비율 */
+function coverage(tokens: string[], text: string): number {
+  const total = tokens.reduce((n, t) => n + t.length, 0)
+  if (total === 0) return 0
+  return tokens.reduce((n, t) => (text.includes(t) ? n + t.length : n), 0) / total
+}
+
+/**
+ * 문항이 속한 제목 구역. 문항 단어가 전부(제목 + 아래 안내문) 들어 있어야 하고, 제목에 많이 들어 있을수록 우선한다.
+ * 같은 점수의 구역이 둘 이상이면 어느 쪽인지 알 수 없으므로 고르지 않는다.
+ */
+function pickSection(sections: Section[], question: string, usedP: Set<Element>): Section | null {
+  const tokens = labelTokens(question)
+  if (tokens.reduce((n, t) => n + t.length, 0) < 4) return null
+  let best: Section | null = null
+  let bestScore = -1
+  let tie = false
+  for (const s of sections) {
+    if (usedP.has(s.p)) continue
+    if (coverage(tokens, s.head + s.body) < 0.999) continue
+    const score = coverage(tokens, s.head)
+    if (score > bestScore + 1e-9) { best = s; bestScore = score; tie = false }
+    else if (Math.abs(score - bestScore) < 1e-9) tie = true
+  }
+  return best && !tie ? best : null
+}
+
+/** 괄호 안내("(*2인 이상인 경우 …)")를 뺀 칸 글 */
+const stripParen = (s: string) => s.replace(/[(（][^)）]*[)）]/g, ' ').trim()
+
+/**
+ * "그룹 + 하위 라벨" 문항("공동연구자 성명")의 후보 하위 라벨 칸들.
+ * 문항 끝이 어떤 칸의 글("성 명")과 같고, 그 앞부분("공동연구자")이 같은 행을 덮는 왼쪽의 가장 가까운 칸 글과 같은 경우.
+ */
+function groupedLabelCandidates(docs: Document[], nq: string): Array<{ doc: Document; tc: Element; p: Element }> {
+  const out: Array<{ doc: Document; tc: Element; p: Element }> = []
+  for (const doc of docs) {
+    for (const tbl of descendants(doc.documentElement, 'tbl')) {
+      const grid = buildGrid(tbl)
+      for (const s of grid.cells) {
+        const ns = norm(stripParen(cellText(s.tc)))
+        if (ns.length < 2 || nq.length <= ns.length || !nq.endsWith(ns)) continue
+        const prefix = nq.slice(0, nq.length - ns.length)
+        let g: GridCell | null = null
+        for (const c of grid.cells) {
+          if (c === s || c.col + c.colSpan > s.col) continue
+          if (c.row <= s.row && s.row < c.row + c.rowSpan && (!g || c.col > g.col)) g = c
+        }
+        if (!g) continue
+        const ng = norm(stripParen(cellText(g.tc)))
+        if (ng.length < 2 || similarity(ng, prefix) < 0.7) continue
+        const p = cellParas(s.tc)[0]
+        if (p) out.push({ doc, tc: s.tc, p })
+      }
+    }
+  }
+  return out
+}
+
+/**
  * 문항 문단의 답변 위치를 찾아 채운다. 채웠으면 true.
  * 표 셀 안의 라벨인데 안전한 대상 칸을 못 찾으면 false (라벨 셀은 건드리지 않고 호출부가 문서 끝에 모은다).
  */
@@ -789,6 +1082,7 @@ function place(
   lines: string[],
   isQuestionCell: (tc: Element) => boolean,
   style: StyleInfo,
+  multi = false,
 ): boolean {
   const tc = closest(p, 'tc')
   const tbl = tc ? closest(tc, 'tbl') : null
@@ -812,10 +1106,74 @@ function place(
     if (right && right !== 'blocked') return fillCell(doc, right.tc, right.kind, lines, style)
     if (right === 'blocked') return false
     const below = findBelow(grid, origin, classify)
-    if (below && below !== 'blocked') return fillCell(doc, below.tc, below.kind, lines, style)
+    if (below && below !== 'blocked') {
+      // "여러 건 입력" 문항인데 제목 아래가 머리글 없는 빈 칸 여러 개면, 한 건씩 칸을 나눠 넣는다
+      if (multi) {
+        const start = grid.byTc.get(below.tc)
+        const entries = splitEntries(lines)
+        if (start && entries.length >= 2 && fillBlankGrid(doc, tbl, start, entries, classify, style)) return true
+      }
+      return fillCell(doc, below.tc, below.kind, lines, style)
+    }
     return false
   }
   fillInline(doc, p, lines)
+  return true
+}
+
+/** 답변을 건 단위로 나눈다. 한 줄뿐이고 " / " 로 이어져 있으면 그 기준으로 나눈다. */
+function splitEntries(lines: string[]): string[] {
+  const entries = lines.map((l) => l.trim()).filter(Boolean)
+  if (entries.length === 1 && /\s\/\s/.test(entries[0])) {
+    return entries[0].split(/\s+\/\s+/).map((x) => x.trim()).filter(Boolean)
+  }
+  return entries
+}
+
+/**
+ * 머리글 없이 빈 칸만 이어진 영역(예: 2칸짜리 자격사항 표)에 한 건당 한 칸씩 읽는 순서대로 넣는다.
+ * 칸이 모자라면 마지막 행을 복제해 늘리고, 복제할 수 없으면 남는 건은 마지막 칸에 줄바꿈으로 모은다.
+ * 칸이 하나뿐이면 아무것도 하지 않고 false (기존 방식으로 처리).
+ */
+function fillBlankGrid(
+  doc: Document,
+  tbl: Element,
+  start: GridCell,
+  entries: string[],
+  classify: Classify,
+  style: StyleInfo,
+): boolean {
+  const grid = buildGrid(tbl)
+  const rows: Array<Array<{ tc: Element; kind: CellKind }>> = []
+  let lastRow = start.row
+  for (let r = start.row; ; r++) {
+    const cells = grid.cells.filter((c) => c.row === r).sort((a, b) => a.col - b.col)
+    if (cells.length === 0 || cells.some((c) => c.rowSpan > 1)) break
+    const kinds = cells.map((c) => classify(c.tc))
+    if (kinds.some((k) => k !== 'empty' && k !== 'guide')) break
+    rows.push(cells.map((c, i) => ({ tc: c.tc, kind: kinds[i] })))
+    lastRow = r
+  }
+  const slots = rows.flat()
+  if (slots.length < 2) return false
+
+  let remaining = entries.length - slots.length
+  while (remaining > 0) {
+    const lastTr = closest(rows[rows.length - 1][0].tc, 'tr')
+    const clone = lastTr ? cloneRowAfter(tbl, lastTr, lastRow) : null
+    if (!clone) break
+    lastRow++
+    const added = childEls(clone, 'tc').map((tc) => ({ tc, kind: 'empty' as CellKind }))
+    rows.push(added)
+    slots.push(...added)
+    remaining -= added.length
+  }
+
+  const n = Math.min(entries.length, slots.length)
+  for (let i = 0; i < n; i++) {
+    const rest = i === slots.length - 1 ? entries.slice(i) : [entries[i]]
+    fillCell(doc, slots[i].tc, slots[i].kind, rest, style)
+  }
   return true
 }
 
@@ -849,6 +1207,7 @@ function fillCell(
   if (paras.length === 0) return false
 
   if (kind === 'sublabels') return fillSubLabels(doc, paras, lines, style)
+  if (kind === 'choices') return fillChoices(doc, paras, lines)
 
   let keep = paras[0]
   if (kind === 'guide') {
@@ -862,6 +1221,68 @@ function fillCell(
   setParaText(doc, keep, lines[0])
   let ref = keep
   for (const line of lines.slice(1)) ref = insertParaAfter(doc, ref, line)
+  return true
+}
+
+/**
+ * 선택지 셀("□ 교수  □ 박사과정 대학원생  □ 기타( 예: … )")에 답변과 맞는 항목을 체크(☑)한다.
+ *  - 답변이 항목 이름을 포함하거나 같으면 그 항목 ("조교수" → 교수)
+ *  - 맞는 항목이 없고 "기타" 가 있으면 기타를 체크하고 괄호 안을 답변으로 바꾼다
+ *  - 어느 쪽도 안 되면 아무것도 바꾸지 않고 false (호출부가 문서 끝으로 보낸다)
+ */
+function fillChoices(doc: Document, paras: Element[], lines: string[]): boolean {
+  interface Opt { t: Element; start: number; end: number; label: string }
+  const opts: Opt[] = []
+  for (const p of paras) {
+    for (const t of ownTs(p)) {
+      const text = tText(t)
+      const re = /[□☐]\s*[^□☐]*/g
+      let m: RegExpExecArray | null
+      while ((m = re.exec(text))) {
+        opts.push({ t, start: m.index, end: m.index + m[0].length, label: m[0].replace(/^[□☐]\s*/, '').trim() })
+      }
+    }
+  }
+  if (opts.length < 2) return false
+
+  const core = (o: Opt) => norm(o.label.replace(/[(（].*$/, ''))
+  const isEtc = (o: Opt) => core(o).includes('기타')
+  const chosen = new Map<Opt, string | null>() // 체크할 항목 → 기타 괄호에 쓸 답 (그 외는 null)
+  for (const line of lines.map((l) => l.trim()).filter(Boolean)) {
+    const na = norm(line)
+    if (na.length < 2) continue
+    let best: Opt | null = null
+    for (const o of opts) {
+      const c = core(o)
+      if (c.length < 2 || isEtc(o)) continue
+      if ((na.includes(c) || c.includes(na)) && (!best || c.length > core(best).length)) best = o
+    }
+    if (best) { chosen.set(best, null); continue }
+    const etc = opts.find(isEtc)
+    if (!etc) return false
+    chosen.set(etc, line)
+  }
+  if (chosen.size === 0) return false
+
+  const byT = new Map<Element, Opt[]>()
+  chosen.forEach((_, o) => byT.set(o.t, [...(byT.get(o.t) ?? []), o]))
+  byT.forEach((list, t) => {
+    let text = tText(t)
+    // 뒤에서부터 바꿔야 앞쪽 위치가 어긋나지 않는다
+    for (const o of list.sort((a, b) => b.start - a.start)) {
+      let seg = text.slice(o.start, o.end).replace(/[□☐]/, '☑')
+      const etcAnswer = chosen.get(o)
+      if (etcAnswer) {
+        seg = /[(（][^)）]*[)）]/.test(seg)
+          ? seg.replace(/[(（][^)）]*[)）]/, `(${etcAnswer})`)
+          : seg.replace(/\s*$/, (tail) => `(${etcAnswer})${tail}`)
+      }
+      text = text.slice(0, o.start) + seg + text.slice(o.end)
+    }
+    setTText(doc, t, text)
+    const p = closest(t, 'p')
+    if (p) dropLineSegs(p)
+  })
   return true
 }
 
@@ -916,6 +1337,10 @@ function fillSubLabels(doc: Document, paras: Element[], lines: string[], style: 
       assigned.set(freeSubs[0], looseLines.join(' '))
     } else if (looseLines.length === freeSubs.length) {
       freeSubs.forEach((p, i) => assigned.set(p, looseLines[i]))
+    } else {
+      // 개수가 안 맞으면 값의 종류(전화번호·이메일)와 라벨 이름이 맞는 경우에만 짝지음. 하나라도 못 정하면 아무것도 쓰지 않는다.
+      const typed = assignByValueType(freeSubs, looseLines)
+      if (typed) typed.forEach((value, p) => assigned.set(p, value))
     }
   }
 
@@ -924,11 +1349,49 @@ function fillSubLabels(doc: Document, paras: Element[], lines: string[], style: 
   return true
 }
 
+/** 값의 종류별로 어울리는 하위 라벨 (앞쪽 패턴이 더 구체적이라 먼저 시도) */
+const TYPED_LABELS: Array<{ isValue: (v: string) => boolean; labels: RegExp[] }> = [
+  { isValue: (v) => /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(v), labels: [/메일|mail/i] },
+  {
+    isValue: (v) => /^[\d\s\-+().]{7,}$/.test(v),
+    labels: [/휴대|핸드폰|모바일|mobile|cell/i, /전화|tel|phone|연락/i],
+  },
+]
+
+/** 라벨 없는 줄들을 값의 종류(전화번호·이메일)로 하위 라벨에 배분. 모든 줄을 확실히 짝지을 수 있을 때만 결과를 돌려준다. */
+function assignByValueType(free: Element[], lines: string[]): Map<Element, string> | null {
+  const out = new Map<Element, string>()
+  for (const line of lines) {
+    const kind = TYPED_LABELS.find((t) => t.isValue(line))
+    if (!kind) return null
+    let hit: Element | undefined
+    for (const re of kind.labels) {
+      hit = free.find((p) => !out.has(p) && re.test(ownText(p).replace(/[:：][\s\S]*$/, '')))
+      if (hit) break
+    }
+    if (!hit) return null
+    out.set(hit, line)
+  }
+  return out
+}
+
 const BLANK_TAIL = /(?:[_＿]{2,}|\.{3,}|…+|\(\s{2,}\)|\[\s{2,}\])\s*$/
+
+/** "라벨 : 템플릿" 의 템플릿 부분에 남아 있는 자리표시 ("0000년 00월 00일", "○○○", "____") */
+const TEMPLATE_AFTER_COLON = /^([^:：]{1,30}[:：])\s*(.*(?:0{2,}|[○◯]{2,}|[_＿]{2,}|X{2,}).*)$/
 
 function fillInline(doc: Document, p: Element, lines: string[]) {
   const ts = ownTs(p)
   const lastT = ts[ts.length - 1]
+  // "3. 연구기간 :  IRB승인후부터 ~ 0000년 00월 00일" → 콜론 뒤 템플릿을 답변으로 바꾼다
+  if (ts.length === 1 && lastT) {
+    const m = TEMPLATE_AFTER_COLON.exec(tText(lastT).trim())
+    if (m) {
+      setTText(doc, lastT, `${m[1]} ${lines.map((l) => l.trim()).filter(Boolean).join(' ')}`)
+      dropLineSegs(p)
+      return
+    }
+  }
   if (lastT && lines.length === 1) {
     const text = tText(lastT)
     if (BLANK_TAIL.test(text)) {

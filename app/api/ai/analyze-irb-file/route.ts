@@ -44,6 +44,14 @@ async function extractHwpText(buffer: Buffer): Promise<string | null> {
 }
 
 async function extractHwpxText(buffer: Buffer): Promise<string | null> {
+  // 표를 행 단위로, 파란 글씨(작성 예시)는 〔예시〕 로 표시해서 읽는다. 실패하면 아래 단순 추출로 폴백.
+  try {
+    const { hwpxToText } = await import('@/lib/hwp/hwpxText')
+    const structured = await hwpxToText(buffer)
+    if (structured) return structured
+  } catch (e) {
+    console.warn('[extractHwpxText] structured extraction failed, falling back:', e instanceof Error ? e.message : e)
+  }
   try {
     const JSZip = (await import('jszip')).default
     const zip = await JSZip.loadAsync(buffer)
