@@ -647,7 +647,7 @@ function fillColumnTable(
   if (numberCols.size === header.cols.length) numberCols.clear()
 
   for (const hc of header.cols) usedHeaders.add(hc.tc)
-  const nonEmpty = lines.map((l) => l.trim()).filter(Boolean)
+  const nonEmpty = splitBar(lines)
   const leftover: string[] = []
   let lastRow = headerBottom + rowTargets.length - 1
   for (let i = 0; i < nonEmpty.length; i++) {
@@ -790,44 +790,93 @@ export async function fillHwpx(template: Buffer, items: HwpxFillItem[]): Promise
   // 구조로 정확히 찾을 수 있으므로 글자 유사도 매칭보다 먼저 처리해 그룹 칸에 잘못 붙는 일을 막는다.
   const candIndex = new Map<Element, number>(cands.map((c, j) => [c.p, j]))
   const usedSubs = new Set<Element>()
-  const placeGrouped = (nq: string, lines: string[]): boolean => {
+  const markUsed = (p: Element) => {
+    const j = candIndex.get(p)
+    if (j !== undefined) used.add(j)
+    usedP.add(p)
+  }
+
+  // 1) 그룹 문항을 하위 라벨 칸에 대응시킨다. 같은 그룹 칸("공동연구자")의 문항끼리 모은다.
+  interface GroupField { question: string; slot: GroupedSlot; raw: string[]; isName: boolean }
+  const byGroup = new Map<Element, { tbl: Element; doc: Document; fields: GroupField[]; works: Set<(typeof work)[number]> }>()
+  const claim = (nq: string): GroupedSlot | null => {
     for (const hit of groupedLabelCandidates(sectionDocs, nq)) {
       if (usedSubs.has(hit.tc)) continue
       usedSubs.add(hit.tc)
-      if (!place(hit.doc, hit.p, lines, isQuestionCell, style)) continue
-      const j = candIndex.get(hit.p)
-      if (j !== undefined) used.add(j)
-      usedP.add(hit.p)
-      return true
+      return hit
     }
-    return false
+    return null
   }
-  for (let i = 0; i < work.length; ) {
-    const w = work[i]
+  const addField = (w: (typeof work)[number], question: string, slot: GroupedSlot, raw: string[]) => {
+    const e = byGroup.get(slot.g.tc) ?? { tbl: slot.tbl, doc: slot.doc, fields: [], works: new Set() }
+    const label = norm(stripParen(cellText(slot.tc)))
+    e.fields.push({ question, slot, raw, isName: label === '성명' || label === '이름' })
+    e.works.add(w)
+    byGroup.set(slot.g.tc, e)
+  }
+  const groupedWorks = new Set<(typeof work)[number]>()
+  for (const w of work) {
     const multi = parseGroupedMulti(w.question)
     if (multi) {
-      // "공동연구자 성명 / 소속 / 직위" + 답변 "박서연 / 한국대 / 부교수" → 하위 라벨마다 한 칸씩
-      const rows = w.lines.map((l) => splitRow(l, multi.subs.length))
-      let placed = 0
-      const failed: Array<{ question: string; lines: string[] }> = []
+      // "공동연구자 성명 / 소속 / 직위" + "박서연 / 한국대 / 부교수\n이서연 / … " (또는 " | " 로 이어짐) → 사람마다 한 줄
+      const rows = splitBar(w.lines).map((l) => splitRow(l, multi.subs.length))
       multi.subs.forEach((sub, k) => {
-        const subLines = rows.map((r) => r[k]).filter(Boolean)
-        if (subLines.length === 0) return
-        const question = `${multi.group} ${sub}`
-        if (placeGrouped(norm(question), subLines)) placed++
-        else failed.push({ question, lines: subLines })
+        const slot = claim(norm(`${multi.group} ${sub}`))
+        if (!slot) return
+        addField(w, `${multi.group} ${sub}`, slot, rows.map((r) => r[k]))
+        groupedWorks.add(w)
       })
-      if (placed > 0) {
-        work.splice(i, 1)
-        filled++
-        unmatched.push(...failed)
-        continue
-      }
-    } else if (placeGrouped(w.nq, w.lines)) {
-      work.splice(i, 1)
-      filled++
-      continue
+    } else {
+      const slot = claim(w.nq)
+      if (!slot) continue
+      addField(w, w.question, slot, splitBar(w.lines))
+      groupedWorks.add(w)
     }
+  }
+
+  // 2) 그룹마다 사람 수를 정하고, 2명 이상이면 하위 라벨 묶음을 복제해 칸을 늘린 뒤 한 명씩 넣는다
+  byGroup.forEach((grp) => {
+    // 사람 수: 성명 칸 기준. 성명 칸이 한 줄에 " / " 로 여러 이름을 줬으면 그것도 사람 구분으로 본다
+    const nameField = grp.fields.find((f) => f.isName)
+    const perPerson = (f: GroupField, n: number): string[] => {
+      if (f.raw.length === 1 && n > 1) {
+        const parts = f.raw[0].split(/\s+\/\s+/).map((s) => s.trim()).filter(Boolean)
+        if (parts.length === n) return parts
+      }
+      return f.raw
+    }
+    let n = Math.max(1, ...grp.fields.map((f) => f.raw.length))
+    if (nameField) {
+      const names = nameField.raw.length === 1 ? nameField.raw[0].split(/\s+\/\s+/).filter(Boolean) : nameField.raw
+      n = Math.max(1, names.length)
+    }
+    const values = grp.fields.map((f) => perPerson(f, n))
+
+    let blocks: Array<Map<Element, Element>> | null = []
+    if (n > 1) blocks = expandGroupBlock(grp.tbl, grp.fields[0].slot.g.tc, grp.fields.map((f) => f.slot.tc), n - 1)
+
+    grp.fields.forEach((f, k) => {
+      const vals = values[k]
+      let ok: boolean
+      if (blocks && vals.length <= n) {
+        // 첫 사람은 원래 칸, 나머지는 복제한 칸
+        ok = vals.length === 0 || place(grp.doc, f.slot.p, [vals[0] ?? ''], isQuestionCell, style)
+        for (let i = 1; i < vals.length && ok; i++) {
+          const cloneTc = blocks[i - 1]?.get(f.slot.tc)
+          const cp = cloneTc ? cellParas(cloneTc)[0] : null
+          if (!cp || !vals[i]) continue
+          place(grp.doc, cp, [vals[i]], isQuestionCell, style)
+        }
+      } else {
+        // 칸을 늘릴 수 없는 구조 → 한 칸에 사람마다 한 줄
+        ok = place(grp.doc, f.slot.p, vals, isQuestionCell, style)
+      }
+      if (ok) markUsed(f.slot.p)
+      else unmatched.push({ question: f.question, lines: vals })
+    })
+  })
+  for (let i = 0; i < work.length; ) {
+    if (groupedWorks.has(work[i])) { work.splice(i, 1); filled++; continue }
     i++
   }
 
@@ -1047,8 +1096,19 @@ const stripParen = (s: string) => s.replace(/[(（][^)）]*[)）]/g, ' ').trim()
  * "그룹 + 하위 라벨" 문항("공동연구자 성명")의 후보 하위 라벨 칸들.
  * 문항 끝이 어떤 칸의 글("성 명")과 같고, 그 앞부분("공동연구자")이 같은 행을 덮는 왼쪽의 가장 가까운 칸 글과 같은 경우.
  */
-function groupedLabelCandidates(docs: Document[], nq: string): Array<{ doc: Document; tc: Element; p: Element }> {
-  const out: Array<{ doc: Document; tc: Element; p: Element }> = []
+interface GroupedSlot {
+  doc: Document
+  tbl: Element
+  /** 병합된 그룹 칸 ("공동연구자") */
+  g: GridCell
+  /** 하위 라벨 칸 ("성 명") */
+  s: GridCell
+  tc: Element
+  p: Element
+}
+
+function groupedLabelCandidates(docs: Document[], nq: string): GroupedSlot[] {
+  const out: GroupedSlot[] = []
   for (const doc of docs) {
     for (const tbl of descendants(doc.documentElement, 'tbl')) {
       const grid = buildGrid(tbl)
@@ -1065,11 +1125,110 @@ function groupedLabelCandidates(docs: Document[], nq: string): Array<{ doc: Docu
         const ng = norm(stripParen(cellText(g.tc)))
         if (ng.length < 2 || similarity(ng, prefix) < 0.7) continue
         const p = cellParas(s.tc)[0]
-        if (p) out.push({ doc, tc: s.tc, p })
+        if (p) out.push({ doc, tbl, g, s, tc: s.tc, p })
       }
     }
   }
   return out
+}
+
+/** 여러 건(여러 사람·여러 행)을 한 줄에 " | " 로 이어 준 답을 건 단위 줄로 나눈다 */
+function splitBar(lines: string[]): string[] {
+  return lines.flatMap((l) => l.split(/\s+\|\s+/)).map((l) => l.trim()).filter(Boolean)
+}
+
+/** 셀 높이 (cellSz height) */
+function cellHeight(tc: Element): number {
+  return intAttr(childEls(tc, 'cellSz')[0], 'height') ?? 0
+}
+
+/**
+ * 그룹 칸("공동연구자", 세로 병합) 안의 하위 라벨 행 묶음(성 명 / 소 속 / 직 위)을 extra 번 복제해 바로 아래에 붙이고,
+ * 그룹 칸의 세로 병합을 그만큼 늘린다. 양식에 적힌 "2인 이상인 경우 칸을 추가하여 작성" 을 코드가 대신 하는 것.
+ * 반환: 복제한 묶음마다 "원래 라벨 칸 → 복제한 라벨 칸" 대응. 안전하게 복제할 수 없는 구조면 null.
+ */
+function expandGroupBlock(tbl: Element, gTc: Element, labelTcs: Element[], extra: number): Array<Map<Element, Element>> | null {
+  if (extra <= 0) return []
+  const grid = buildGrid(tbl)
+  const g = grid.byTc.get(gTc)
+  const labels = labelTcs.map((tc) => grid.byTc.get(tc)).filter((c): c is GridCell => !!c)
+  if (!g || labels.length === 0) return null
+
+  const start = Math.min(...labels.map((c) => c.row))
+  const end = Math.max(...labels.map((c) => c.row + c.rowSpan - 1))
+  const blockLen = end - start + 1
+  // 묶음이 그룹 칸의 세로 범위 안에 있어야 한다
+  if (start < g.row || end > g.row + g.rowSpan - 1) return null
+
+  const trOf = new Map<number, Element>()
+  for (const c of grid.cells) {
+    if (c.tc === gTc) continue
+    const tr = closest(c.tc, 'tr')
+    if (tr && c.row >= start && c.row <= end) trOf.set(c.row, tr)
+  }
+  const rowHeights: number[] = []
+  for (let r = start; r <= end; r++) {
+    if (!trOf.has(r)) return null // 행 전체가 위쪽 병합에 덮인 경우 등 — 복제하지 않는다
+    const hs = grid.cells.filter((c) => c.row === r && c.rowSpan === 1 && c.tc !== gTc).map((c) => cellHeight(c.tc))
+    rowHeights.push(Math.max(0, ...hs))
+  }
+
+  for (const c of grid.cells) {
+    if (c.tc === gTc) continue
+    const top = c.row
+    const bottom = c.row + c.rowSpan - 1
+    const touches = bottom >= start && top <= end
+    // 묶음 경계를 넘나드는 병합 칸이 있으면 복제하면 표가 깨진다
+    if (touches && (top < start || bottom > end)) return null
+    if (top <= end && bottom > end) return null
+    if (touches && (descendants(c.tc, 'tbl').length > 0 || descendants(c.tc, 'pic').length > 0)) return null
+  }
+
+  const shift = extra * blockLen
+  // 뒤쪽 행의 행 번호를 민다 (복제본은 아래에서 직접 번호를 매긴다)
+  for (const tc of descendants(tbl, 'tc')) {
+    if (closest(tc, 'tbl') !== tbl) continue
+    const addr = childEls(tc, 'cellAddr')[0]
+    const r = intAttr(addr, 'rowAddr')
+    if (addr && r != null && r > end) addr.setAttribute('rowAddr', String(r + shift))
+  }
+
+  const maps: Array<Map<Element, Element>> = []
+  let anchor = trOf.get(end)!
+  for (let k = 1; k <= extra; k++) {
+    const map = new Map<Element, Element>()
+    for (let r = start; r <= end; r++) {
+      const orig = trOf.get(r)!
+      const clone = orig.cloneNode(true) as Element
+      const origTcs = childEls(orig, 'tc')
+      const cloneTcs = childEls(clone, 'tc')
+      origTcs.forEach((otc, i) => {
+        const ctc = cloneTcs[i]
+        if (otc === gTc) { clone.removeChild(ctc); return } // 그룹 칸은 복제하지 않는다 (병합을 늘린다)
+        const addr = childEls(ctc, 'cellAddr')[0]
+        const rr = intAttr(addr, 'rowAddr')
+        if (addr && rr != null) addr.setAttribute('rowAddr', String(rr + k * blockLen))
+        for (const p of cellParas(ctc)) dropLineSegs(p)
+        map.set(otc, ctc)
+      })
+      anchor.parentNode!.insertBefore(clone, anchor.nextSibling)
+      anchor = clone
+    }
+    maps.push(map)
+  }
+
+  const addedHeight = extra * rowHeights.reduce((a, b) => a + b, 0)
+  const span = childEls(gTc, 'cellSpan')[0]
+  if (span) span.setAttribute('rowSpan', String(g.rowSpan + shift))
+  const gSz = childEls(gTc, 'cellSz')[0]
+  if (gSz && addedHeight) gSz.setAttribute('height', String(cellHeight(gTc) + addedHeight))
+  const cnt = intAttr(tbl, 'rowCnt')
+  if (cnt != null) tbl.setAttribute('rowCnt', String(cnt + shift))
+  const tSz = childEls(tbl, 'sz')[0]
+  const th = intAttr(tSz, 'height')
+  if (tSz && th != null && addedHeight) tSz.setAttribute('height', String(th + addedHeight))
+  gridCache.delete(tbl)
+  return maps
 }
 
 /**
@@ -1123,7 +1282,7 @@ function place(
 
 /** 답변을 건 단위로 나눈다. 한 줄뿐이고 " / " 로 이어져 있으면 그 기준으로 나눈다. */
 function splitEntries(lines: string[]): string[] {
-  const entries = lines.map((l) => l.trim()).filter(Boolean)
+  const entries = splitBar(lines)
   if (entries.length === 1 && /\s\/\s/.test(entries[0])) {
     return entries[0].split(/\s+\/\s+/).map((x) => x.trim()).filter(Boolean)
   }

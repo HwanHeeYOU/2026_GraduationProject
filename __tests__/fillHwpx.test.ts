@@ -324,13 +324,95 @@ describe('fillHwpx', () => {
     expect(texts).toContain('대학/대학원                      학과/학부')
   })
 
-  it('묶인 문항에서 여러 명이면 하위 라벨 칸마다 한 줄씩 넣는다', async () => {
+  it('2명 이상이면 성명/소속/직위 묶음을 복제해 칸을 늘리고 한 명씩 넣는다', async () => {
     const tpl = await makeHwpx(peopleTable())
     const r = await fillHwpx(tpl, [
       { question: '공동연구자 성명 / 소속 / 직위', answer: '박서연 / 한국대 / 부교수\n이도윤 / 연구센터 / 연구원' },
     ])
+    expect(r.unmatched).toEqual([])
+    const { texts, xml } = await readSection(r.buffer)
+    expect(texts.slice(-12)).toEqual([
+      '성 명', '박서연', '소 속', '한국대', '직 위', '부교수',
+      '성 명', '이도윤', '소 속', '연구센터', '직 위', '연구원',
+    ])
+    // 공동연구자 병합 칸이 4행 → 7행으로 늘어난다
+    expect(xml).toMatch(/공동연구자 \(\*2인 이상인 경우 칸을 추가하여 모두 작성\)<\/hp:t>.*?rowSpan="7"/s)
+  })
+
+  it('AI 가 사람을 " | " 로 이어 줘도 마지막 칸에 몰지 않고 사람마다 나눈다', async () => {
+    const tpl = await makeHwpx(peopleTable())
+    const r = await fillHwpx(tpl, [
+      { question: '공동연구자 성명 / 소속 / 직위 - 여러 건 입력', answer: '박서연 / 한국대 / 부교수 | 이서연 / 한국대학교 심리학과 / 박사후연구원' },
+    ])
     const { texts } = await readSection(r.buffer)
-    expect(texts.slice(-9)).toEqual(['성 명', '박서연', '이도윤', '소 속', '한국대', '연구센터', '직 위', '부교수', '연구원'])
+    expect(texts).not.toContain('부교수 | 이서연 / 한국대학교 심리학과 / 박사후연구원')
+    expect(texts.slice(-12)).toEqual([
+      '성 명', '박서연', '소 속', '한국대', '직 위', '부교수',
+      '성 명', '이서연', '소 속', '한국대학교 심리학과', '직 위', '박사후연구원',
+    ])
+  })
+
+  it('하위 라벨마다 따로 뽑힌 문항("연구원 성명" = "A / B")도 사람 수만큼 칸을 늘린다', async () => {
+    const tpl = await makeHwpx(peopleTable())
+    const r = await fillHwpx(tpl, [
+      { question: '공동연구자 성명', answer: '이도윤 / 최하늘' },
+      { question: '공동연구자 소속', answer: '대학원 심리학과 / 인지과학연구센터' },
+      { question: '공동연구자 직위', answer: '석사과정 대학원생 / 박사후연구원' },
+    ])
+    expect(r.unmatched).toEqual([])
+    const { texts } = await readSection(r.buffer)
+    expect(texts.slice(-12)).toEqual([
+      '성 명', '이도윤', '소 속', '대학원 심리학과', '직 위', '석사과정 대학원생',
+      '성 명', '최하늘', '소 속', '인지과학연구센터', '직 위', '박사후연구원',
+    ])
+  })
+
+  it('행 번호(cellAddr)가 있는 표에서 뒤쪽 행 번호와 표 행 수를 함께 고친다', async () => {
+    const c = (col: number, row: number, text: string, colSpan = 1, rowSpan = 1) =>
+      `<hp:tc><hp:subList>${para(text)}</hp:subList><hp:cellAddr colAddr="${col}" rowAddr="${row}"/><hp:cellSpan colSpan="${colSpan}" rowSpan="${rowSpan}"/><hp:cellSz width="1000" height="500"/></hp:tc>`
+    const body =
+      `<hp:p id="0" paraPrIDRef="1" styleIDRef="0"><hp:run charPrIDRef="0"><hp:tbl rowCnt="5" colCnt="3"><hp:sz width="3000" height="2500"/>` +
+      tr(c(0, 0, '공동연구자', 1, 4), c(1, 0, '□ 해당없음', 2)) +
+      tr(c(1, 1, '성 명'), c(2, 1, '')) +
+      tr(c(1, 2, '소 속'), c(2, 2, '')) +
+      tr(c(1, 3, '직 위'), c(2, 3, '')) +
+      tr(c(0, 4, '※ 학위논문인 경우 지도교수 기재', 3)) +
+      `</hp:tbl></hp:run></hp:p>`
+    const r = await fillHwpx(await makeHwpx(body), [
+      { question: '공동연구자 성명 / 소속 / 직위', answer: 'A / a / 교수\nB / b / 강사\nC / c / 연구원' },
+    ])
+    expect(r.unmatched).toEqual([])
+    const { xml, texts } = await readSection(r.buffer)
+    expect(xml).toContain('rowCnt="11"') // 5 + 2명 × 3행
+    expect(xml).toMatch(/공동연구자<\/hp:t>.*?rowSpan="10"/s) // 4 + 6
+    expect(xml).toMatch(/지도교수 기재<\/hp:t>.*?rowAddr="10"/s) // 뒤쪽 행이 4 → 10 으로 밀림
+    expect(xml).toContain('height="5500"') // 표 높이도 3명분 늘어남 (2500 + 6행 × 500)
+    expect(texts.filter((t) => ['A', 'B', 'C'].includes(t))).toEqual(['A', 'B', 'C'])
+    // 행 번호가 겹치지 않는다
+    const addrs = Array.from(xml.matchAll(/colAddr="(\d+)" rowAddr="(\d+)"/g)).map((m) => `${m[1]},${m[2]}`)
+    expect(new Set(addrs).size).toBe(addrs.length)
+  })
+
+  it('묶음 경계를 넘는 병합 칸이 있어 안전하게 복제할 수 없으면 한 칸에 사람마다 한 줄로 넣는다', async () => {
+    const tpl = await makeHwpx(
+      tbl(
+        tr(spanCell('공동연구자', 1, 3), spanCell('성 명'), spanCell('', 1, 2)), // 값 칸이 성명·소속 두 행에 걸쳐 병합
+        tr(spanCell('소 속')),
+        tr(spanCell('직 위'), spanCell('')),
+      ),
+    )
+    const r = await fillHwpx(tpl, [{ question: '공동연구자 성명', answer: '박서연\n이서연' }])
+    expect(r.unmatched).toEqual([])
+    const { texts } = await readSection(r.buffer)
+    expect(texts).toEqual(['공동연구자', '성 명', '박서연', '이서연', '소 속', '직 위'])
+  })
+
+  it('1명이면 칸을 늘리지 않는다', async () => {
+    const tpl = await makeHwpx(peopleTable())
+    const r = await fillHwpx(tpl, [{ question: '공동연구자 성명 / 소속 / 직위', answer: '박서연 / 한국대 / 부교수' }])
+    const { xml } = await readSection(r.buffer)
+    expect(xml).toMatch(/모두 작성\)<\/hp:t>.*?rowSpan="4"/s)
+    expect((xml.match(/성 명/g) ?? []).length).toBe(2) // 연구책임자 + 공동연구자
   })
 
   // ── 라벨 + 템플릿 문단, 제목 구역 ──
