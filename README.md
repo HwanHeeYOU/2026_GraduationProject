@@ -4,12 +4,12 @@
 YourPark is a web application designed to help researchers prepare IRB (Institutional Review Board) documents. I developed this project to reduce the time and effort required to prepare research ethics documents, which often involve complex forms and institution-specific requirements. The application uses AI to generate initial drafts from user-provided keywords while allowing researchers to review and edit the generated content.
 
 ## Tech Stack
-- **Frontend:** Next.js, React, TypeScript, Tailwind CSS
-- **Backend:** Next.js API Routes
-- **Database:** SQLite, Prisma
-- **Authentication:** NextAuth.js, bcrypt
-- **AI:** Anthropic Claude API
-- **Document Processing:** HWP/HWPX, XML, JSZip
+- Frontend: Next.js, React, TypeScript, Tailwind CSS
+- Backend: Next.js API Routes
+- Database: SQLite, Prisma
+- Authentication: NextAuth.js, bcrypt
+- AI: Anthropic Claude API
+- Document Processing: HWP/HWPX, XML, JSZip
 
 ## Key Features
 - Institution-specific IRB module configuration.
