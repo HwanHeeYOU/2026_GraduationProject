@@ -509,6 +509,75 @@ describe('fillHwpx', () => {
     expect(r.unmatched).toEqual(['지도교수 성명'])
   })
 
+  // ── 줄바꿈(\n) → 문단(<hp:p>) 분리 ──
+  /** 문서 안 n번째 표 셀의 문단들 (글, paraPrIDRef, charPrIDRef) */
+  async function cellParagraphs(buf: Buffer, n: number) {
+    const { xml } = await readSection(buf)
+    const doc = new DOMParser().parseFromString(xml, 'text/xml')
+    const tc = doc.getElementsByTagName('hp:tc')[n]
+    return Array.from(tc.getElementsByTagName('hp:p')).map((p) => ({
+      text: Array.from(p.getElementsByTagName('hp:t')).map((t) => t.textContent ?? '').join(''),
+      paraPr: p.getAttribute('paraPrIDRef'),
+      charPr: p.getElementsByTagName('hp:run')[0]?.getAttribute('charPrIDRef'),
+      linesegs: p.getElementsByTagName('hp:linesegarray').length,
+    }))
+  }
+
+  const PROCEDURE = '1) 연구절차\n1. 연구 설명 및 서면 동의\n2. 사전 검사\n3. 8주간 훈련\n\n2) 관찰 항목\n- 반응 시간\n- 정확도'
+
+  it('여러 줄 답변은 줄마다 원본 셀과 같은 문단·글자 서식의 <hp:p> 로 나뉘어 들어간다 (빈 줄도 문단 하나)', async () => {
+    const tpl = await makeHwpx(tbl(tr(cell(0, 0, '연구 방법'), cell(1, 0, ''))))
+    const r = await fillHwpx(tpl, [{ question: '연구 방법', answer: PROCEDURE }])
+    const paras = await cellParagraphs(r.buffer, 1)
+    expect(paras.map((p) => p.text)).toEqual(PROCEDURE.split('\n'))
+    // 모든 문단이 원본 빈 셀의 서식(paraPrIDRef=1, charPrIDRef=7)을 그대로 쓴다
+    expect(new Set(paras.map((p) => `${p.paraPr}/${p.charPr}`))).toEqual(new Set(['1/7']))
+    // 레이아웃 캐시(linesegarray)는 남기지 않아 한글이 다시 계산한다
+    expect(paras.every((p) => p.linesegs === 0)).toBe(true)
+    // " | " 나 공백으로 뭉쳐지지 않는다
+    const { texts } = await readSection(r.buffer)
+    expect(texts.some((t) => t.includes('서면 동의 2.'))).toBe(false)
+  })
+
+  it('파란 안내문 셀에 여러 줄을 넣어도 줄마다 문단이 되고 안내문은 지워진다', async () => {
+    const header =
+      '<hh:head xmlns:hh="x"><hh:charPr id="7" textColor="#000000" height="1000"/>' +
+      '<hh:charPr id="9" textColor="#0000FF" height="1000"/></hh:head>'
+    const tpl = await makeHwpx(tbl(tr(cellOf('관찰 항목'), cellOf('- 수집할 자료를 기술', '9'))), header)
+    const r = await fillHwpx(tpl, [{ question: '관찰 항목', answer: '- 반응 시간\n- 정확도\n- 오류 수' }])
+    const paras = await cellParagraphs(r.buffer, 1)
+    expect(paras.map((p) => p.text)).toEqual(['- 반응 시간', '- 정확도', '- 오류 수'])
+    expect(paras.every((p) => p.charPr === '7')).toBe(true) // 파란색 → 같은 모양의 검은색
+  })
+
+  it('AI 가 줄바꿈을 "\\n" 두 글자로 보내도 문단으로 나눈다', async () => {
+    const tpl = await makeHwpx(tbl(tr(cell(0, 0, '연구절차'), cell(1, 0, ''))))
+    const r = await fillHwpx(tpl, [{ question: '연구절차', answer: '1. 동의\\n2. 검사\\n3. 훈련' }])
+    expect((await cellParagraphs(r.buffer, 1)).map((p) => p.text)).toEqual(['1. 동의', '2. 검사', '3. 훈련'])
+  })
+
+  it('"라벨 : 템플릿" 줄에 여러 줄 답변이면 첫 줄은 템플릿 자리에, 나머지는 아래 문단으로', async () => {
+    const tpl = await makeHwpx(para('3. 연구기간 :  IRB승인후부터 ~ 0000년 00월 00일') + para('4. 연구대상'))
+    const r = await fillHwpx(tpl, [{ question: '연구기간', answer: 'IRB 승인 후부터 2027년 12월 31일까지\n(총 12개월)' }])
+    expect((await readSection(r.buffer)).texts).toEqual(['3. 연구기간 : IRB 승인 후부터 2027년 12월 31일까지', '(총 12개월)', '4. 연구대상'])
+  })
+
+  it('제목 구역에 여러 문항을 묶어 넣을 때도 여러 줄 답변은 "문항:" 다음 줄부터 한 줄씩', async () => {
+    const BLUE = '<hh:head xmlns:hh="x"><hh:charPr id="7" textColor="#000000"/><hh:charPr id="9" textColor="#2E74B5"/></hh:head>'
+    const g = (t: string) => para(t).replace('charPrIDRef="7"', 'charPrIDRef="9"')
+    const doc = para('4) 개인정보 보호 및 제공에 관한 사항') + g('- 수집하는 개인정보의 항목을 기술') + g('- 제3자 제공 여부를 기술')
+    const r = await fillHwpx(await makeHwpx(doc, BLUE), [
+      { question: '개인정보 수집 항목', answer: '- 이름\n- 연락처' },
+      { question: '개인정보 제3자 제공 여부', answer: '제공하지 않음' },
+    ])
+    expect(r.unmatched).toEqual([])
+    expect((await readSection(r.buffer)).texts.slice(0, 5)).toEqual([
+      '4) 개인정보 보호 및 제공에 관한 사항',
+      '개인정보 수집 항목:', '- 이름', '- 연락처',
+      '개인정보 제3자 제공 여부: 제공하지 않음',
+    ])
+  })
+
   it('HWPX가 아니면 에러를 던진다', async () => {
     const zip = new JSZip()
     zip.file('a.txt', 'x')

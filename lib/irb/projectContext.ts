@@ -9,24 +9,39 @@ export interface ProjectContextSource {
   modules?: Array<{ content?: string | null; module?: { name?: string | null } | null }> | null
 }
 
-/** 컨텍스트 전체 상한 (문항 청크마다 반복 전달되므로 과도하게 키우지 않는다) */
-export const PROJECT_CONTEXT_MAX_CHARS = 20000
+/**
+ * 컨텍스트 전체 상한. 문항 청크마다 반복 전달되므로 Luxia 응답 시간(타임아웃·ECONNRESET)을 고려해 작게 둔다.
+ * 사용자가 직접 쓴 모듈 메모는 이 상한과 관계없이 전부 넣고, 문서 요약본은 남은 자리만큼만 넣는다.
+ */
+export const PROJECT_CONTEXT_MAX_CHARS = 8000
+
+export const TRUNCATION_MARK = '\n…(이하 생략)'
 
 /** 컨텍스트가 없으면 빈 문자열 */
 export function buildProjectContext(src: ProjectContextSource | null | undefined): string {
   if (!src) return ''
-  const parts: string[] = []
 
-  const summary = src.sourceSummary?.trim()
-  if (summary) parts.push(`[문서 분석 요약본]\n${summary}`)
-
+  // 1순위: 사용자가 모듈 카드에 직접 작성한 메모 — 자르지 않는다
   const written = (src.modules ?? [])
     .map((m) => ({ name: m.module?.name?.trim() || '(이름 없음)', content: (m.content ?? '').trim() }))
     .filter((m) => m.content.length > 0)
-  if (written.length > 0) {
-    parts.push(`[사용자가 모듈 카드에 직접 작성한 내용]\n${written.map((m) => `■ ${m.name}\n${m.content}`).join('\n\n')}`)
+  const modulesBlock = written.length > 0
+    ? `[사용자가 모듈 카드에 직접 작성한 내용]\n${written.map((m) => `■ ${m.name}\n${m.content}`).join('\n\n')}`
+    : ''
+
+  // 2순위: 문서 분석 요약본 — 상한에서 모듈 메모를 뺀 나머지 자리만큼
+  const summary = src.sourceSummary?.trim() ?? ''
+  let summaryBlock = ''
+  if (summary) {
+    const header = '[문서 분석 요약본]\n'
+    const sep = modulesBlock ? 2 : 0
+    const budget = PROJECT_CONTEXT_MAX_CHARS - modulesBlock.length - sep - header.length
+    if (summary.length <= budget) summaryBlock = header + summary
+    else if (budget > TRUNCATION_MARK.length + 200) {
+      summaryBlock = header + summary.slice(0, budget - TRUNCATION_MARK.length) + TRUNCATION_MARK
+    }
+    // 남은 자리가 거의 없으면 요약본은 넣지 않는다 (모듈 메모가 우선)
   }
 
-  const text = parts.join('\n\n')
-  return text.length > PROJECT_CONTEXT_MAX_CHARS ? text.slice(0, PROJECT_CONTEXT_MAX_CHARS) + '\n…(이하 생략)' : text
+  return [summaryBlock, modulesBlock].filter(Boolean).join('\n\n')
 }

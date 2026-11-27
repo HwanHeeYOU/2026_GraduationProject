@@ -699,7 +699,12 @@ interface Cand {
 }
 
 function splitLines(answer: string): string[] {
-  const lines = answer.replace(/\r/g, '').split('\n').map((l) => l.replace(/\s+$/, ''))
+  // AI 가 줄바꿈을 실제 개행이 아니라 "\n" 두 글자로 써 보내는 경우도 줄바꿈으로 본다
+  const lines = answer
+    .replace(/\r/g, '')
+    .replace(/\\n/g, '\n')
+    .split('\n')
+    .map((l) => l.replace(/\s+$/, ''))
   while (lines.length > 1 && lines[lines.length - 1] === '') lines.pop()
   return lines.length ? lines : ['']
 }
@@ -945,7 +950,12 @@ export async function fillHwpx(template: Buffer, items: HwpxFillItem[]): Promise
       const lines =
         fresh.length === 1 && !reused
           ? fresh[0].lines
-          : fresh.map((w) => `${shortLabel(w.question)}: ${w.lines.map((l) => l.trim()).filter(Boolean).join(' ')}`)
+          : fresh.flatMap((w) => {
+              // 한 줄짜리 답은 "문항: 답변", 여러 줄이면 "문항:" 다음 줄부터 한 줄씩 (줄바꿈 유지)
+              const body = w.lines.map((l) => l.trim()).filter(Boolean)
+              const label = shortLabel(w.question)
+              return body.length <= 1 ? [`${label}: ${body[0] ?? ''}`] : [`${label}:`, ...body]
+            })
       fillInline(s.doc, s.p, lines)
       usedP.add(s.p)
       filled += fresh.length
@@ -1546,8 +1556,12 @@ function fillInline(doc: Document, p: Element, lines: string[]) {
   if (ts.length === 1 && lastT) {
     const m = TEMPLATE_AFTER_COLON.exec(tText(lastT).trim())
     if (m) {
-      setTText(doc, lastT, `${m[1]} ${lines.map((l) => l.trim()).filter(Boolean).join(' ')}`)
+      // 첫 줄은 템플릿 자리에, 나머지 줄은 같은 서식의 문단으로 이어서 넣는다 (줄바꿈을 공백으로 뭉개지 않는다)
+      const [first = '', ...rest] = lines.map((l) => l.trim()).filter(Boolean)
+      setTText(doc, lastT, `${m[1]} ${first}`)
       dropLineSegs(p)
+      let ref = p
+      for (const line of rest) ref = insertParaAfter(doc, ref, line)
       return
     }
   }
